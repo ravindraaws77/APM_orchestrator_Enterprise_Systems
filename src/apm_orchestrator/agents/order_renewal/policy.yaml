@@ -1,0 +1,60 @@
+# Order-Renewal agent policy: what makes something "a renewal", the SLA
+# windows it works to, and what counts as a blocker. Data, not code, per
+# docs/roadmap.md (apm_connectors repo): the next business agent should be
+# a new policy file + a different toolbelt subset, not new plumbing.
+
+# Gmail search query used to detect a renewal/complaint/escalation signal.
+# Gmail search syntax (see apm_connectors docs/api-contract.md).
+detection:
+  gmail_query: "newer_than:14d (renewal OR renew OR \"contract expiring\" OR \"license expiring\")"
+  max_results: 20
+
+# SOQL used to look up the account/opportunity once a signal is matched.
+# {account_domain} / {account_name} are filled in by the agent from the
+# detected email.
+salesforce:
+  lookup_soql: >-
+    SELECT Id, Name, StageName, CloseDate, Amount, AccountId
+    FROM Opportunity
+    WHERE Account.Name = '{account_name}'
+    ORDER BY CloseDate ASC
+    LIMIT 5
+
+# A renewal is only actionable inside this window before the current
+# contract's close/expiry date.
+sla:
+  renewal_window_days: 60
+  # Days before expiry after which a renewal without human sign-off is
+  # treated as at-risk and escalated rather than proposed normally.
+  escalation_threshold_days: 14
+
+# JQL used to check for tickets that should block sending a renewal
+# notice or closing the Opportunity (e.g. an open support escalation
+# against the same account).
+blocking_tickets:
+  jql: >-
+    project = SUPPORT AND status not in (Done, Closed)
+    AND summary ~ "{account_name}"
+  # Any of these issue types/labels on a matching ticket blocks the
+  # renewal until resolved.
+  blocking_issue_types: ["Escalation", "Bug"]
+  blocking_labels: ["renewal-blocker"]
+
+# Where follow-up work for a renewal gets routed if it needs a partner
+# or another internal team, per docs/roadmap.md: "a Jira project, not an
+# ad hoc issue".
+follow_up_routing:
+  default_project_key: "OPS"
+  # Maps a detected keyword/account attribute to a specific Jira
+  # project/component -- extend per real team/partner as they're onboarded.
+  routes:
+    - match: "partner_managed"
+      project_key: "PARTNEROPS"
+    - match: "enterprise"
+      project_key: "ENTSUCCESS"
+
+# Reporting cadence (Excel), explicitly separate from and lower-stakes
+# than the live workflow -- Salesforce stays the system of record.
+reporting:
+  workbook_sheet: "Renewals"
+  address: "A1"
