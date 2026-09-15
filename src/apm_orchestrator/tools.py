@@ -50,7 +50,26 @@ async def aclose_client() -> None:
         _client = None
 
 
+def _disambiguate_pending_action(data: Any) -> Any:
+    """A write route's response has two different values both called
+    "action_id": the top-level one (what apm_connectors' /status and
+    /decision routes actually key on) and an unrelated internal
+    state-store bookkeeping id nested inside `pending_action`, which
+    happens to share that field name. Live-verified more than once: the
+    model reads the wrong one when reporting a pending action's id back
+    to a human reviewer. Strip the inner one so a tool result only ever
+    has one field named `action_id` to read.
+    """
+    if isinstance(data, dict):
+        pending = data.get("pending_action")
+        if isinstance(pending, dict) and "action_id" in pending:
+            pending = {k: v for k, v in pending.items() if k != "action_id"}
+            data = {**data, "pending_action": pending}
+    return data
+
+
 def _ok(data: Any) -> dict[str, Any]:
+    data = _disambiguate_pending_action(data)
     return {"content": [{"type": "text", "text": json.dumps(data, default=str)}]}
 
 
