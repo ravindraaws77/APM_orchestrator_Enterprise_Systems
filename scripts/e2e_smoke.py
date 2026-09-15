@@ -45,6 +45,7 @@ async def main(base_url: str, orchestrator_key: str, approver_key: str) -> int:
             connectors_api_key=orchestrator_key,
             anthropic_api_key=None,
             order_renewal_policy_path=None,
+            database_url=None,
         )
     )
     approver = ConnectorsClient(
@@ -53,6 +54,7 @@ async def main(base_url: str, orchestrator_key: str, approver_key: str) -> int:
             connectors_api_key=approver_key,
             anthropic_api_key=None,
             order_renewal_policy_path=None,
+            database_url=None,
         )
     )
     ok = True

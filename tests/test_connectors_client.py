@@ -11,6 +11,7 @@ def _client_with_transport(transport: httpx.MockTransport) -> ConnectorsClient:
         connectors_api_key="test-key",
         anthropic_api_key=None,
         order_renewal_policy_path=None,
+        database_url=None,
     )
     return ConnectorsClient(settings=settings, transport=transport)
 

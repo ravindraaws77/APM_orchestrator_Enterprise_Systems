@@ -12,9 +12,15 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=8.0", "pytest-asyncio>=0.23"]
+# Durable per-case state: the Order-Renewal case graph and the poller
+# that resumes it both need this -- see agents/order_renewal/case_graph.py
+# and poller.py. Same libraries apm_connectors itself uses for its own
+# (separate) approval-gate graph.
+postgres = ["langgraph>=0.2", "langgraph-checkpoint-postgres>=2.0", "psycopg[binary,pool]>=3.2"]
 
 [project.scripts]
 apm-orchestrator = "apm_orchestrator.cli:main"
+apm-orchestrator-poller = "apm_orchestrator.poller:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

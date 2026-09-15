@@ -14,6 +14,7 @@ class Settings:
     connectors_api_key: str | None
     anthropic_api_key: str | None
     order_renewal_policy_path: str | None
+    database_url: str | None
 
 
 def load_settings() -> Settings:
@@ -24,4 +25,5 @@ def load_settings() -> Settings:
         connectors_api_key=os.environ.get("APM_CONNECTORS_API_KEY") or None,
         anthropic_api_key=os.environ.get("ANTHROPIC_API_KEY") or None,
         order_renewal_policy_path=os.environ.get("ORDER_RENEWAL_POLICY_PATH") or None,
+        database_url=os.environ.get("DATABASE_URL") or None,
     )

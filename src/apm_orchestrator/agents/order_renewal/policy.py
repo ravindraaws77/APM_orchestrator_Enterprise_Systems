@@ -71,6 +71,10 @@ class OrderRenewalPolicy:
     def reporting_address(self) -> str:
         return self.raw["reporting"]["address"]
 
+    @property
+    def record_update_fields(self) -> dict[str, Any]:
+        return dict(self.raw["record_update"]["fields_template"])
+
 
 def load_policy(path: str | Path | None = None) -> OrderRenewalPolicy:
     policy_path = Path(path) if path else _DEFAULT_POLICY_PATH

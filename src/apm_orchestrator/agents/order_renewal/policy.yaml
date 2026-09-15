@@ -58,3 +58,12 @@ follow_up_routing:
 reporting:
   workbook_sheet: "Renewals"
   address: "A1"
+
+# Fields proposed on the Opportunity once a renewal call is scheduled and
+# approved and the confirmation notice is sent and approved -- the
+# "update the record of truth" step. Kept as data (not a hardcoded
+# StageName guess) since real picklist values are specific to each
+# Salesforce org.
+record_update:
+  fields_template:
+    StageName: "Closed Won"

@@ -30,6 +30,20 @@ of.
   that maps to something real ("the Renewals agent can touch Opportunity
   records and send renewal mail," not "this agent can call the
   Salesforce API").
+- **Order-Renewal case graph** (`agents/order_renewal/case_graph.py`) —
+  a durable LangGraph state machine, one Postgres-checkpointed thread
+  per business case, sequencing detect → verify → check-blockers →
+  (propose → wait-for-approval) × 3. Deliberately not agentic: every
+  node is a fixed `apm_connectors` call plus policy logic, restart-safe
+  and unit-testable without an LLM in the loop. This is a *different*
+  use of LangGraph than `apm_connectors`' own `graph.py`, which gates a
+  single write behind its own in-process approval `interrupt()` — see
+  that module's docstring for how the two relate (they never share a
+  checkpointer).
+- **Poller** (`poller.py`) — a standalone process that resumes an
+  in-flight case once its `apm_connectors` pending action resolves.
+  Decoupled from everything else on purpose: run it once (`--once`, for
+  cron/systemd-timer/CI schedules) or continuously (`--loop`).
 
 **The approval boundary never moves.** No tool here ever calls
 `apm_connectors`' `POST /tools/actions/{id}/decision` — that decision
@@ -39,14 +53,18 @@ See `apm_connectors/docs/security-guardrails.md`.
 ## What's not here yet
 
 - The avatar/voice/visual interface (Phase 2).
-- Shared task/conversation state (Postgres) for the Supervisor to track
-  multi-step plans across agents — each CLI invocation today is one
-  independent turn.
 - Any specialized agent besides Order-Renewal (Churn Prevention,
   Customer Onboarding, ...) — add one the same way: a new
-  `agents/<name>/` package with its own `policy.yaml` + `agent.py`
+  `agents/<name>/` package with its own `policy.yaml` + `case_graph.py`
   picking a toolbelt subset from `tools.py`, plus a new
   `delegate_to_<name>` tool in `supervisor.py`.
+- The case graph's full write path (propose_call/notice/record_update)
+  is only real-server-verified up to the point Gmail/Calendar/Salesforce
+  aren't configured (a clean, graceful stop) -- exercising it against
+  live Google/Salesforce credentials hasn't been done yet. The
+  interrupt/Postgres/poller *mechanism* itself is verified for real (see
+  `tests/test_case_graph_mechanics.py`), independent of which connector
+  sits behind it.
 
 ## Running locally
 
@@ -58,6 +76,20 @@ cp .env.example .env   # fill in ANTHROPIC_API_KEY, APM_CONNECTORS_BASE_URL, etc
 # docs/running-locally.md), reachable at APM_CONNECTORS_BASE_URL.
 
 apm-orchestrator "Acme Corp emailed asking to renew their annual license."
+```
+
+### Running a durable case (Postgres required)
+
+```bash
+pip install -e ".[postgres]"
+# DATABASE_URL must be set (.env.example) -- a database this repo owns,
+# separate from apm_connectors' own DATABASE_URL if it has one.
+
+python scripts/run_case.py acme-2026-09-15 "Acme Corp"   # starts (or resumes-from-scratch) one case
+
+# ... once a proposed action is approved/rejected in apm_connectors ...
+
+apm-orchestrator-poller --once     # or --loop --interval 60 for a long-lived process
 ```
 
 ## Tests
@@ -101,3 +133,41 @@ events to those two different callers; and an unconfigured connector
 Running the Supervisor/Order-Renewal agent itself end to end
 additionally needs `ANTHROPIC_API_KEY` set (see `.env.example`) — the
 above only validates the HTTP boundary this repo's agents are built on.
+
+## Case graph mechanism test (real Postgres + real server, no mocks)
+
+`tests/test_case_graph_mechanics.py` proves the interrupt → Postgres
+checkpoint → external resume mechanism `wait_for_approval` depends on,
+using that exact function against a real `AsyncPostgresSaver` and a real
+`apm_connectors` server (Excel again, as the one credential-free write --
+see the file's docstring for why it doesn't drive the full Order-Renewal
+graph). Skipped unless both `APM_TEST_DATABASE_URL` and a reachable
+`APM_CONNECTORS_BASE_URL` are set:
+
+```bash
+pip install -e ".[dev,postgres]"
+createdb apm_orchestrator_test   # or point at any disposable Postgres
+APM_TEST_DATABASE_URL=postgresql://localhost/apm_orchestrator_test \
+APM_CONNECTORS_BASE_URL=http://127.0.0.1:8123 \
+APM_CONNECTORS_API_KEY=orch-key \
+APM_APPROVER_API_KEY=approver-key \
+pytest tests/test_case_graph_mechanics.py -v
+```
+
+`tests/test_case_graph_nodes.py` covers the Order-Renewal-specific node
+logic (detect/verify/blockers routing, the propose→interrupt→resume
+chain, and specifically the `action_id` vs. `pending_action["action_id"]`
+distinction below) with a mocked client and `MemorySaver` -- no infra
+needed at all.
+
+**A real gotcha this repo's own tests caught**: a write route's
+`RunOutcomeResponse.action_id` (top-level) and its
+`pending_action["action_id"]` are *two different UUIDs* when no
+`process_id` is passed to the propose call -- the former is
+`apm_connectors`' process/thread id (what `GET /processes/{id}/status`
+and `POST /tools/actions/{id}/decision` both need), the latter is an
+internal state-store bookkeeping id that happens to share the field name
+`action_id` inside the nested payload. `case_graph.py`'s propose nodes
+store the top-level one explicitly (`state["action_id"]`) rather than
+reading it back out of `pending_action` -- see the comment there before
+"fixing" this the other way.

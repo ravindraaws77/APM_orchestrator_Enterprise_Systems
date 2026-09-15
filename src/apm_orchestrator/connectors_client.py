@@ -65,6 +65,22 @@ class ConnectorsClient:
             )
         return response.json()
 
+    async def _get(self, path: str) -> dict[str, Any] | None:
+        """Returns `None` on a 404 (apm_connectors treats "unknown
+        process_id" as a legitimate answer, not an error -- see that
+        repo's scripts/api_smoke_test.py), raises on any other failure."""
+        try:
+            response = await self._http.get(path)
+        except httpx.HTTPError as exc:
+            raise ConnectorError(f"apm_connectors call to {path} failed: {exc}") from exc
+        if response.status_code == 404:
+            return None
+        if response.status_code >= 400:
+            raise ConnectorError(
+                f"apm_connectors {path} returned {response.status_code}: {response.text}"
+            )
+        return response.json()
+
     # -- Gmail --------------------------------------------------------
 
     async def gmail_search_emails(
@@ -305,3 +321,12 @@ class ConnectorsClient:
         return await self._post(
             f"/tools/actions/{action_id}/decision", {"approved": approved}
         )
+
+    async def get_action_status(self, action_id: str) -> dict[str, Any] | None:
+        """`None` while `action_id` is still awaiting a human decision --
+        apm_connectors' state store only sets a process's status once its
+        graph reaches `execute_node` (i.e. only after approval or
+        rejection; see that repo's graph.py), so "no status yet" is what
+        "still pending" looks like over this route. Used by the poller
+        to find out whether a case's `wait_for_approval` can resume."""
+        return await self._get(f"/processes/{action_id}/status")
