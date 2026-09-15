@@ -23,4 +23,5 @@ def test_route_for_matches_configured_tag():
     policy = load_policy()
 
     matched = policy.route_for("enterprise")
-    assert matched == "ENTSUCCESS"
+    assert matched == policy.raw["follow_up_routing"]["routes"][1]["project_key"]
+    assert matched != policy.raw["follow_up_routing"]["default_project_key"]

@@ -54,6 +54,18 @@ contains the same substring). If normalized names match more than one
 distinct `AccountId`, that's an `ambiguous_account` stop, not a guess.
 See `tests/test_verify_account_matching.py`.
 
+**Every Jira project key in `policy.yaml` is a placeholder you must
+replace, never a working default.** Live-verified twice: a plausible-
+looking but fictional project key (`OPS`, `SUPPORT`, `ENTSUCCESS`, ...)
+doesn't fail at startup -- a *write* route (`jira_create_issue`) 400s
+only once a real proposal reaches it, and a *read* route
+(`jira_search_issues` for blocking tickets) is worse: it just returns
+zero results forever, silently turning a safety check into a permanent
+false "no blockers." The shipped policy.yaml now spells every one of
+these as `REPLACE_WITH_...` specifically so it can't be mistaken for a
+real value left unedited. Never reintroduce a plausible-sounding
+placeholder project key (an "OPS"-shaped guess) in its place.
+
 ## Working conventions
 
 - **Agents are decomposed by business process, not by connector.** A

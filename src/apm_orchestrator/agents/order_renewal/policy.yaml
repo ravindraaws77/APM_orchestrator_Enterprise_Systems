@@ -46,27 +46,48 @@ sla:
 # JQL used to check for tickets that should block sending a renewal
 # notice or closing the Opportunity (e.g. an open support escalation
 # against the same account).
+#
+# ACTION NEEDED: "REPLACE_WITH_YOUR_SUPPORT_PROJECT_KEY" is not a real
+# Jira project -- live-verified failure mode: a plausible-looking but
+# fictional key here doesn't error, it just returns zero results
+# forever, so this check silently reports "no blockers" on *every*
+# account, permanently. That's worse than a loud failure. Set this to a
+# real project key in your Jira site before trusting this check for
+# anything.
 blocking_tickets:
   jql: >-
-    project = SUPPORT AND status not in (Done, Closed)
+    project = REPLACE_WITH_YOUR_SUPPORT_PROJECT_KEY AND status not in (Done, Closed)
     AND summary ~ "{account_name}"
   # Any of these issue types/labels on a matching ticket blocks the
-  # renewal until resolved.
-  blocking_issue_types: ["Escalation", "Bug"]
+  # renewal until resolved. "Task" is included deliberately, not just
+  # "Escalation"/"Bug": a live-verified real blocker (a high-priority,
+  # SLA-impacting support issue) was filed as a plain "Task" with no
+  # labels, because not every Jira site uses a dedicated escalation
+  # type. Since `jql` above already narrows to open tickets whose
+  # summary mentions this account, erring toward "an unclassified open
+  # ticket about this account blocks until reviewed" is the safer
+  # default than silently missing it -- tune per your site's real
+  # issue-type taxonomy once you have one.
+  blocking_issue_types: ["Escalation", "Bug", "Task"]
   blocking_labels: ["renewal-blocker"]
 
 # Where follow-up work for a renewal gets routed if it needs a partner
 # or another internal team, per docs/roadmap.md: "a Jira project, not an
 # ad hoc issue".
+#
+# ACTION NEEDED: same caveat as blocking_tickets.jql above -- these are
+# placeholder examples, not real projects. Set every project_key below
+# to one that actually exists in your Jira site (an invalid one here
+# 400s only when a real proposal finally reaches it, not at startup).
 follow_up_routing:
-  default_project_key: "OPS"
+  default_project_key: "REPLACE_WITH_YOUR_DEFAULT_JIRA_PROJECT_KEY"
   # Maps a detected keyword/account attribute to a specific Jira
   # project/component -- extend per real team/partner as they're onboarded.
   routes:
     - match: "partner_managed"
-      project_key: "PARTNEROPS"
+      project_key: "REPLACE_WITH_YOUR_PARTNER_OPS_PROJECT_KEY"
     - match: "enterprise"
-      project_key: "ENTSUCCESS"
+      project_key: "REPLACE_WITH_YOUR_ENTERPRISE_SUCCESS_PROJECT_KEY"
 
 # Reporting cadence (Excel), explicitly separate from and lower-stakes
 # than the live workflow -- Salesforce stays the system of record.
