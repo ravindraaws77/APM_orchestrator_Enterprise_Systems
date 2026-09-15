@@ -69,3 +69,35 @@ pytest -q
 Runs without live credentials or a running `apm_connectors` server —
 `connectors_client` tests use `httpx.MockTransport`, and `policy` tests
 just load the bundled YAML.
+
+## End-to-end smoke test (real server, no mocks)
+
+`scripts/e2e_smoke.py` drives a real, running `apm_connectors` server
+over real HTTP with this repo's actual `ConnectorsClient` — no mock
+transport. It only needs the one connector that takes no external
+credentials (local Excel), so it's runnable with zero live Gmail/
+Salesforce/Jira accounts:
+
+```bash
+# In apm_connectors:
+APM_EXCEL_WORKBOOK_PATH=/path/to/workbook.xlsx \
+APM_API_KEYS="orchestrator:orch-key,human-approver:approver-key" \
+uvicorn apm_connectors.api.app:app --port 8123
+
+# In this repo:
+python scripts/e2e_smoke.py \
+    --base-url http://127.0.0.1:8123 \
+    --orchestrator-key orch-key \
+    --approver-key approver-key
+```
+
+Proves, against the real process: a read returns real workbook data; a
+proposed write pauses with `final_result: null` and doesn't touch the
+file; a second, differently-keyed caller approving it is what actually
+writes the file; the audit trail attributes the propose and approve
+events to those two different callers; and an unconfigured connector
+(Salesforce here) 503s cleanly instead of crashing anything.
+
+Running the Supervisor/Order-Renewal agent itself end to end
+additionally needs `ANTHROPIC_API_KEY` set (see `.env.example`) — the
+above only validates the HTTP boundary this repo's agents are built on.
