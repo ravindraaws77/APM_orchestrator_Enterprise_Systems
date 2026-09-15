@@ -78,11 +78,9 @@ def _build_options() -> ClaudeAgentOptions:
     return ClaudeAgentOptions(
         system_prompt=SYSTEM_PROMPT,
         mcp_servers={"supervisor_delegates": supervisor_server},
+        # Listing a tool here is what auto-approves it at the SDK layer
+        # (live-verified) -- see tools.py's module docstring.
         allowed_tools=["mcp__supervisor_delegates__delegate_to_order_renewal"],
-        # Safe to auto-approve: the only tool available delegates to
-        # another agent whose own writes are apm_connectors pending
-        # actions, gated by a human one layer below either agent.
-        permission_mode="bypassPermissions",
     )
 
 

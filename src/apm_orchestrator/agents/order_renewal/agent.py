@@ -124,12 +124,11 @@ def _build_options(mode: Mode, policy: OrderRenewalPolicy) -> ClaudeAgentOptions
     return ClaudeAgentOptions(
         system_prompt=_render_system_prompt(mode, policy),
         mcp_servers={"apm_connectors": apm_connectors_server},
+        # Listing a tool here is what auto-approves it at the SDK layer
+        # (live-verified) -- no permission_mode/can_use_tool needed on
+        # top, and "bypassPermissions" specifically would fail outright
+        # when this process runs as root.
         allowed_tools=tools,
-        # Safe to auto-approve at the SDK layer: every "write" tool above
-        # only proposes a pending action in apm_connectors: the real gate
-        # is that service's own human-approval endpoint, never something
-        # this SDK session can reach.
-        permission_mode="bypassPermissions",
     )
 
 

@@ -14,11 +14,14 @@ human-facing review surface), never something an agent calls itself.
 `ConnectorsClient.decide_action` exists for that human-facing surface to
 use, not for any agent's toolbelt.
 
-Every tool here is safe to let the SDK auto-approve (see agents' use of
-`permission_mode="bypassPermissions"`): a "write" tool never performs
-the real-world write, it only calls a `/tools/*` route that returns a
-*proposed*, paused action. The actual gate is apm_connectors' own
-approval endpoint, one layer below anything this SDK controls.
+Every tool here is safe to auto-approve at the SDK layer, which is what
+listing a tool's fully-qualified name in `ClaudeAgentOptions.allowed_tools`
+already does (live-verified: the SDK auto-approves an allowed tool before
+any `can_use_tool` callback is even consulted, so no extra permission
+plumbing is needed here) -- a "write" tool never performs the real-world
+write, it only calls a `/tools/*` route that returns a *proposed*, paused
+action. The actual gate is apm_connectors' own approval endpoint, one
+layer below anything this SDK controls.
 """
 
 from __future__ import annotations
