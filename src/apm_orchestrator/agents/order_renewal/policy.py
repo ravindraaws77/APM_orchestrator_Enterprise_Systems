@@ -35,6 +35,10 @@ class OrderRenewalPolicy:
         return self.raw["salesforce"]["lookup_soql"]
 
     @property
+    def salesforce_fallback_lookup_soql_template(self) -> str:
+        return self.raw["salesforce"]["fallback_lookup_soql"]
+
+    @property
     def renewal_window_days(self) -> int:
         return self.raw["sla"]["renewal_window_days"]
 

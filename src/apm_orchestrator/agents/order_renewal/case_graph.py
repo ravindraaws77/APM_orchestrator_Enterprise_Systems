@@ -56,6 +56,8 @@ class CaseState(TypedDict, total=False):
 
     signal_message: dict[str, Any] | None
     opportunity: dict[str, Any] | None
+    stale_opportunities: list[str]  # past-due, still-open -- a data-hygiene
+    # note surfaced alongside the outcome, never a reason to stop this case
     blocked: bool
     blocker_reason: str | None
     contract_doc: dict[str, Any] | None
@@ -90,6 +92,38 @@ class CaseOutcome:
 
 def _config(case_id: str) -> dict[str, Any]:
     return {"configurable": {"thread_id": case_id}}
+
+
+def _escape_soql_literal(value: str) -> str:
+    """Escape a value going into a single-quoted SOQL string literal --
+    SOQL uses a backslash before an embedded quote, same idea as SQL's
+    doubled quote but with `\\'` instead."""
+    return value.replace("\\", "\\\\").replace("'", "\\'")
+
+
+def _normalize_account_name(name: str) -> str:
+    """Collapses the punctuation/whitespace/case differences a real
+    account name and an inbound email's version of it commonly disagree
+    on (a trailing period, extra whitespace, case) -- deliberately not
+    fuzzy beyond that: two *different* accounts (a UK/Singapore
+    subsidiary) should still normalize to different strings."""
+    return " ".join(name.split()).rstrip(".").casefold()
+
+
+def _find_stale_open_opportunities(records: list[dict[str, Any]]) -> list[str]:
+    """Opportunities past their close date that are still open -- a data-
+    hygiene signal, never a reason to stop the current case (see
+    record_outcome_node)."""
+    today = date.today()
+    stale = []
+    for record in records:
+        fields = record.get("fields", {})
+        close_date_str = fields.get("CloseDate")
+        if not close_date_str or fields.get("IsClosed"):
+            continue
+        if date.fromisoformat(close_date_str) < today:
+            stale.append(f"{record['record_id']} ({fields.get('Name')}, due {close_date_str})")
+    return stale
 
 
 def _next_business_day_slot() -> tuple[datetime, datetime]:
@@ -154,15 +188,46 @@ async def verify_account_node(state: CaseState) -> dict[str, Any]:
     client = get_client()
     policy = load_policy()
     steps = state.get("steps_completed", [])
+    account_name = state["account_name"]
+    escaped_name = _escape_soql_literal(account_name)
 
-    soql = policy.salesforce_lookup_soql_template.format(account_name=state["account_name"])
+    soql = policy.salesforce_lookup_soql_template.format(account_name=escaped_name)
     records = await client.salesforce_query_records(soql=soql)
+
     if not records:
-        return {
-            "stop_reason": f"No Salesforce Opportunity found for {state['account_name']!r}.",
-            "steps_completed": steps + ["verify_account:no_opportunity"],
+        # Exact match found nothing -- try a widened search, but tie-break
+        # by normalized name rather than trusting every LIKE hit: a
+        # trailing period or stray whitespace shouldn't stop a real
+        # renewal, but a same-substring sibling account (a UK/Singapore
+        # subsidiary) shouldn't get silently treated as the right one either.
+        fallback_soql = policy.salesforce_fallback_lookup_soql_template.format(account_name=escaped_name)
+        candidates = await client.salesforce_query_records(soql=fallback_soql)
+        target = _normalize_account_name(account_name)
+        matched_account_ids = {
+            candidate["fields"].get("AccountId")
+            for candidate in candidates
+            if _normalize_account_name(candidate["fields"].get("Account", {}).get("Name") or "") == target
         }
 
+        if len(matched_account_ids) > 1:
+            return {
+                "stop_reason": (
+                    f"{len(matched_account_ids)} different Salesforce accounts all match "
+                    f"{account_name!r} once punctuation/case is ignored -- can't safely pick "
+                    "one without a real Account id to disambiguate."
+                ),
+                "steps_completed": steps + ["verify_account:ambiguous_account"],
+            }
+        if not matched_account_ids:
+            return {
+                "stop_reason": f"No Salesforce Opportunity found for {account_name!r}.",
+                "steps_completed": steps + ["verify_account:no_opportunity"],
+            }
+
+        matched_id = next(iter(matched_account_ids))
+        records = [c for c in candidates if c["fields"].get("AccountId") == matched_id]
+
+    stale = _find_stale_open_opportunities(records)
     opportunity = records[0]
     close_date_str = opportunity.get("fields", {}).get("CloseDate")
     if close_date_str:
@@ -173,10 +238,15 @@ async def verify_account_node(state: CaseState) -> dict[str, Any]:
                     f"Opportunity {opportunity['record_id']} closes in {days_out}d, "
                     f"outside the {policy.renewal_window_days}d renewal window."
                 ),
+                "stale_opportunities": stale,
                 "steps_completed": steps + ["verify_account:outside_window"],
             }
 
-    return {"opportunity": opportunity, "steps_completed": steps + ["verify_account"]}
+    return {
+        "opportunity": opportunity,
+        "stale_opportunities": stale,
+        "steps_completed": steps + ["verify_account"],
+    }
 
 
 @_guarded("check_blockers")
@@ -309,6 +379,14 @@ def record_outcome_node(state: CaseState) -> dict[str, Any]:
         summary = f"Stopped: the {state.get('awaiting_step')} step was rejected."
     else:
         summary = f"Renewal workflow completed for {state['account_name']}."
+
+    stale = state.get("stale_opportunities")
+    if stale:
+        summary += (
+            " Separately (outside this renewal's scope): these open Opportunities "
+            f"are past their close date and likely need re-dating: {'; '.join(stale)}."
+        )
+
     return {"final_summary": summary, "done": True}
 
 

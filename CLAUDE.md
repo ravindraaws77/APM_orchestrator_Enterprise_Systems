@@ -41,6 +41,19 @@ result["action_id"]`, never derived from `pending_action`). This was a
 real bug live-verified against a running server; guarded by
 `test_case_graph_nodes.py`'s happy-path test.
 
+**Never match a Salesforce account by exact string equality alone.** A
+real end-to-end run against a live org found `Account.Name =
+'{account_name}'` silently returning zero rows because the real record
+had a trailing period the inbound email's version of the name didn't.
+`verify_account_node` now falls back to a `LIKE` query on exact-match
+failure, but ties back to the account by *normalized*-name equality
+(`_normalize_account_name`: collapse whitespace, strip a trailing
+period, casefold) -- never by trusting every `LIKE` hit, since that also
+matches unrelated sibling accounts (a UK/Singapore subsidiary whose name
+contains the same substring). If normalized names match more than one
+distinct `AccountId`, that's an `ambiguous_account` stop, not a guess.
+See `tests/test_verify_account_matching.py`.
+
 ## Working conventions
 
 - **Agents are decomposed by business process, not by connector.** A

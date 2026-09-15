@@ -11,14 +11,29 @@ detection:
 
 # SOQL used to look up the account/opportunity once a signal is matched.
 # {account_domain} / {account_name} are filled in by the agent from the
-# detected email.
+# detected email. IsClosed/Account.Name are selected so the node can spot
+# a past-due-but-still-open Opportunity and tie-break the fallback query
+# below -- not just to report the values.
 salesforce:
   lookup_soql: >-
-    SELECT Id, Name, StageName, CloseDate, Amount, AccountId
+    SELECT Id, Name, StageName, CloseDate, Amount, AccountId, IsClosed, Account.Name
     FROM Opportunity
     WHERE Account.Name = '{account_name}'
     ORDER BY CloseDate ASC
     LIMIT 5
+  # Used only when the exact-match query above returns nothing -- real
+  # account names drift from an inbound email's version of them (a
+  # trailing period, different capitalization) more often than they're
+  # genuinely missing. LIKE alone isn't enough to act on, though: it also
+  # matches unrelated sibling accounts (a UK/Singapore subsidiary whose
+  # name merely contains the same substring) -- the node tie-breaks by
+  # normalized-name equality, not by trusting every LIKE hit.
+  fallback_lookup_soql: >-
+    SELECT Id, Name, StageName, CloseDate, Amount, AccountId, IsClosed, Account.Name
+    FROM Opportunity
+    WHERE Account.Name LIKE '%{account_name}%'
+    ORDER BY CloseDate ASC
+    LIMIT 50
 
 # A renewal is only actionable inside this window before the current
 # contract's close/expiry date.

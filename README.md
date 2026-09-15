@@ -58,13 +58,15 @@ See `apm_connectors/docs/security-guardrails.md`.
   `agents/<name>/` package with its own `policy.yaml` + `case_graph.py`
   picking a toolbelt subset from `tools.py`, plus a new
   `delegate_to_<name>` tool in `supervisor.py`.
-- The case graph's full write path (propose_call/notice/record_update)
-  is only real-server-verified up to the point Gmail/Calendar/Salesforce
-  aren't configured (a clean, graceful stop) -- exercising it against
-  live Google/Salesforce credentials hasn't been done yet. The
-  interrupt/Postgres/poller *mechanism* itself is verified for real (see
-  `tests/test_case_graph_mechanics.py`), independent of which connector
-  sits behind it.
+- The case graph (`case_graph.py`, LangGraph) hasn't been run against
+  live Gmail/Calendar/Salesforce credentials yet -- only against an
+  unconfigured server (a clean, graceful stop) and, for the
+  interrupt/Postgres/poller mechanism specifically, a real server with
+  Excel as a stand-in write (`tests/test_case_graph_mechanics.py`).
+  The **Claude Agent SDK path** (`agent.py`, run via `apm-orchestrator`)
+  *has* been run end to end against real Gmail/Salesforce/Jira -- see
+  `CLAUDE.md`'s note on the exact-match SOQL bug that run surfaced and
+  fixed in `verify_account_node`.
 
 ## Running locally
 
