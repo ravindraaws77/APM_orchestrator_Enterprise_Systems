@@ -66,6 +66,18 @@ these as `REPLACE_WITH_...` specifically so it can't be mistaken for a
 real value left unedited. Never reintroduce a plausible-sounding
 placeholder project key (an "OPS"-shaped guess) in its place.
 
+**Never pick "the" Opportunity for a renewal check with `records[0]`
+after an `ORDER BY`.** Live-verified: `ORDER BY CloseDate ASC LIMIT 5`
+on a long-lived account grabs the *oldest* handful of Opportunities
+ever, which can silently exclude the one actually relevant today. Both
+SOQL templates in `policy.yaml` fetch a wide candidate set with no
+`ORDER BY` reliance; `verify_account_node` picks whichever `CloseDate`
+is closest to today (past or future) via `_closest_to_today`, and the
+window check (`abs(days_out) > renewal_window_days`) is symmetric for
+the same reason -- a recently-passed close date is still "in window,"
+not just an upcoming one. See
+`test_picks_opportunity_closest_to_today_not_the_ascending_first`.
+
 ## Working conventions
 
 - **Agents are decomposed by business process, not by connector.** A

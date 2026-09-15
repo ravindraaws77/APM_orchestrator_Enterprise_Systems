@@ -126,6 +126,23 @@ def _find_stale_open_opportunities(records: list[dict[str, Any]]) -> list[str]:
     return stale
 
 
+def _closest_to_today(records: list[dict[str, Any]]) -> dict[str, Any]:
+    """The Opportunity most relevant to a renewal check right now --
+    whichever CloseDate is nearest today, past or future -- rather than
+    trusting SOQL ordering to have surfaced the right one. A record with
+    no CloseDate at all sorts last, never picked over one that has a
+    date to reason about."""
+    today = date.today()
+
+    def distance(record: dict[str, Any]) -> float:
+        close_date_str = record.get("fields", {}).get("CloseDate")
+        if not close_date_str:
+            return float("inf")
+        return abs((date.fromisoformat(close_date_str) - today).days)
+
+    return min(records, key=distance)
+
+
 def _next_business_day_slot() -> tuple[datetime, datetime]:
     """A fixed 30-minute slot on the next weekday -- there is no
     availability-checking route in apm_connectors' contract yet
@@ -228,14 +245,19 @@ async def verify_account_node(state: CaseState) -> dict[str, Any]:
         records = [c for c in candidates if c["fields"].get("AccountId") == matched_id]
 
     stale = _find_stale_open_opportunities(records)
-    opportunity = records[0]
+    opportunity = _closest_to_today(records)
     close_date_str = opportunity.get("fields", {}).get("CloseDate")
     if close_date_str:
         days_out = (date.fromisoformat(close_date_str) - date.today()).days
-        if days_out > policy.renewal_window_days:
+        # Symmetric: the closest-to-today Opportunity can be past or
+        # future (see _closest_to_today), so "in window" means within
+        # renewal_window_days either side of today, not just not-too-far
+        # in the future.
+        if abs(days_out) > policy.renewal_window_days:
             return {
                 "stop_reason": (
-                    f"Opportunity {opportunity['record_id']} closes in {days_out}d, "
+                    f"Opportunity {opportunity['record_id']} closed/closes "
+                    f"{abs(days_out)}d {'ago' if days_out < 0 else 'from now'}, "
                     f"outside the {policy.renewal_window_days}d renewal window."
                 ),
                 "stale_opportunities": stale,

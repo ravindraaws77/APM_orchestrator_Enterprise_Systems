@@ -6,6 +6,8 @@ in a real account name. Mocked ConnectorsClient, no live infra.
 
 from __future__ import annotations
 
+from datetime import date, timedelta
+
 import httpx
 import pytest
 
@@ -132,3 +134,33 @@ async def test_surfaces_stale_open_opportunities_without_stopping(monkeypatch):
     )
     assert "outside this renewal's scope" in outcome["final_summary"]
     assert "opp-stale" in outcome["final_summary"]
+
+
+@pytest.mark.asyncio
+async def test_picks_opportunity_closest_to_today_not_the_ascending_first(monkeypatch):
+    """Regression test for a real bug: ORDER BY CloseDate ASC LIMIT 5
+    used to hand verify_account_node whatever came back first, which on
+    a long-lived account is the *oldest* Opportunity ever, not the one
+    relevant to a renewal happening now."""
+    today = date.today()
+    ancient = (today - timedelta(days=300)).isoformat()
+    relevant = (today + timedelta(days=10)).isoformat()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        # Simulates SOQL's own ascending order: the ancient record sorts
+        # first, exactly the shape that broke the old records[0] logic.
+        return httpx.Response(
+            200,
+            json=[
+                _opportunity("opp-ancient", "acc-1", "Acme Corp", ancient),
+                _opportunity("opp-relevant", "acc-1", "Acme Corp", relevant),
+            ],
+        )
+
+    import apm_orchestrator.tools as tools_module
+
+    monkeypatch.setattr(tools_module, "_client", _client_with_handler(handler))
+
+    result = await verify_account_node({"account_name": "Acme Corp", "steps_completed": []})
+
+    assert result["opportunity"]["record_id"] == "opp-relevant"

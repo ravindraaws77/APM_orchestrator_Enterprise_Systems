@@ -14,13 +14,20 @@ detection:
 # detected email. IsClosed/Account.Name are selected so the node can spot
 # a past-due-but-still-open Opportunity and tie-break the fallback query
 # below -- not just to report the values.
+#
+# Deliberately NOT "ORDER BY CloseDate ASC LIMIT 5" -- live-verified
+# failure mode on a long-lived account: ascending order + a small LIMIT
+# grabs the *oldest* handful of Opportunities ever recorded, which for
+# an account with real history can silently exclude the one actually
+# relevant to a renewal today. The node instead fetches a wide candidate
+# set and picks whichever CloseDate is closest to today (past or
+# future) in Python -- see _closest_to_today in case_graph.py.
 salesforce:
   lookup_soql: >-
     SELECT Id, Name, StageName, CloseDate, Amount, AccountId, IsClosed, Account.Name
     FROM Opportunity
     WHERE Account.Name = '{account_name}'
-    ORDER BY CloseDate ASC
-    LIMIT 5
+    LIMIT 50
   # Used only when the exact-match query above returns nothing -- real
   # account names drift from an inbound email's version of them (a
   # trailing period, different capitalization) more often than they're
@@ -32,8 +39,7 @@ salesforce:
     SELECT Id, Name, StageName, CloseDate, Amount, AccountId, IsClosed, Account.Name
     FROM Opportunity
     WHERE Account.Name LIKE '%{account_name}%'
-    ORDER BY CloseDate ASC
-    LIMIT 50
+    LIMIT 200
 
 # A renewal is only actionable inside this window before the current
 # contract's close/expiry date.
