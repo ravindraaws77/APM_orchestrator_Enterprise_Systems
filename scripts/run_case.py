@@ -13,8 +13,16 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import sys
 
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
+
+# psycopg's async mode needs a selector-based event loop; Windows'
+# asyncio default (ProactorEventLoop) isn't compatible with it and fails
+# at connection time with "Psycopg cannot use the 'ProactorEventLoop'"
+# -- live-verified. No effect on other platforms.
+if sys.platform == "win32":
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
 from apm_orchestrator.agents.order_renewal.case_graph import build_case_graph, start_case
 from apm_orchestrator.config import load_settings
