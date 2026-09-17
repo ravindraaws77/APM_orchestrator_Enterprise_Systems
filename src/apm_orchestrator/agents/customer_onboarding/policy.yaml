@@ -86,7 +86,12 @@ blocking_tickets:
   jql: >-
     project = REPLACE_WITH_YOUR_SUPPORT_PROJECT_KEY AND status not in (Done, Closed)
     AND summary ~ "{account_name}"
-  blocking_issue_types: ["Onboarding", "Task"]
+  # "Onboarding" isn't a real issue type in a standard Jira Kanban-template
+  # project (live-checked: only Task/Bug/Story/Epic exist by default) --
+  # "Task" alone is the one guaranteed to exist, same reasoning as
+  # order_renewal's own blocking_issue_types comment on erring toward an
+  # unclassified open ticket blocking until reviewed.
+  blocking_issue_types: ["Task"]
   blocking_labels: ["onboarding-in-progress"]
 
 # Best-effort: pull an existing welcome-packet/kickoff-checklist template
@@ -117,9 +122,17 @@ welcome_notice:
 # order_renewal/policy.yaml's follow_up_routing), not a new,
 # onboarding-only placeholder -- one real project key to fill in covers
 # both agents. ACTION NEEDED: same caveat as blocking_tickets.jql above.
+#
+# issue_type is "Task", not "Onboarding" -- live-checked against a real
+# Jira Kanban-template project (screenshot review during this session's
+# live-test prep): it only has Task/Bug/Story/Epic configured, no
+# "Onboarding" type. Creating this ticket with a made-up issue type
+# would 400 on the real jira_create_issue call once approved. Change
+# this only if your Jira site has genuinely added a real "Onboarding"
+# (or similar) issue type.
 onboarding_tracking:
   project_key: "REPLACE_WITH_YOUR_DEFAULT_JIRA_PROJECT_KEY"
-  issue_type: "Onboarding"
+  issue_type: "Task"
 
 # Fields proposed on the Opportunity once the kickoff call and welcome
 # notice are both approved -- marks onboarding as started. This writes

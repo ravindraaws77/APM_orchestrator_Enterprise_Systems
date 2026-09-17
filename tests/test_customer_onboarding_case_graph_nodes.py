@@ -119,7 +119,10 @@ async def test_check_blockers_stops_on_existing_onboarding_ticket(monkeypatch):
         if request.url.path == "/tools/jira/search":
             return httpx.Response(
                 200,
-                json=[{"issue_key": "OPS-1", "issue_type": "Onboarding", "fields": {"labels": []}}],
+                # "Task", not "Onboarding" -- policy.yaml's blocking_issue_types
+                # only lists "Task", the one issue type live-checked to
+                # actually exist in a standard Jira Kanban-template project.
+                json=[{"issue_key": "OPS-1", "issue_type": "Task", "fields": {"labels": []}}],
             )
         raise AssertionError(f"unexpected call: {request.url.path}")
 
