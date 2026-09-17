@@ -5,17 +5,29 @@
 # business agent should be a new policy file + a different toolbelt
 # subset, not new plumbing).
 #
-# BASELINE CONTRACT ONLY -- see ../../../../CUSTOMER_ONBOARDING_CONTRACT.md
-# for the full design writeup. This file alone doesn't run anything yet:
-# there is no policy.py loader and no case_graph.py for this agent. It's
-# the shape the next implementation session builds both of those against,
-# the same way order_renewal/policy.yaml predates order_renewal/policy.py.
+# See ../../../../CUSTOMER_ONBOARDING_CONTRACT.md for the full design
+# writeup and the record of which open questions were resolved and how.
+# `policy.py` (loader), `case_graph.py` (detect/verify/act/record nodes)
+# and `agent.py` (Claude Agent SDK loop, wired into supervisor.py) all
+# read this file the same way order_renewal's do theirs.
 
 # A new customer to onboard is detected from Salesforce directly (an
 # Opportunity just closed as new business), not from Gmail like
 # Order-Renewal -- onboarding starts from a CRM state change, not an
 # inbound email. {account_name} is filled in by the agent, same
 # convention as order_renewal's own SOQL templates.
+#
+# Confirmed against the real org: Type reliably distinguishes 'New
+# Business' from 'Renewal' on Opportunity, so this stays the detect
+# discriminator (see CUSTOMER_ONBOARDING_CONTRACT.md's resolved
+# decisions).
+#
+# Deliberately NOT exact-match-only -- CLAUDE.md's non-negotiable rule
+# (never match a Salesforce account by exact string equality alone,
+# live-verified against order_renewal: a trailing period silently
+# returned zero rows). detect_node falls back to fallback_soql on a
+# miss and tie-breaks by normalized-name equality, same as
+# order_renewal's verify_account_node.
 detection:
   salesforce_new_customer_soql: >-
     SELECT Id, Name, StageName, CloseDate, Type, AccountId, Account.Name
@@ -24,6 +36,13 @@ detection:
     AND StageName = 'Closed Won'
     AND Type = 'New Business'
     LIMIT 50
+  fallback_soql: >-
+    SELECT Id, Name, StageName, CloseDate, Type, AccountId, Account.Name
+    FROM Opportunity
+    WHERE Account.Name LIKE '%{account_name}%'
+    AND StageName = 'Closed Won'
+    AND Type = 'New Business'
+    LIMIT 200
   max_results: 20
 
 # Onboarding is only actionable within this window after the deal closed.
@@ -49,6 +68,15 @@ salesforce:
 # for the same customer if this case gets re-triggered. Same shape as
 # order_renewal's blocking_tickets.
 #
+# Deliberately points at the SAME placeholder string as
+# order_renewal/policy.yaml's own blocking_tickets.jql
+# (REPLACE_WITH_YOUR_SUPPORT_PROJECT_KEY) rather than a new
+# onboarding-specific one: this portfolio runs both agents against one
+# real Jira project, so filling in that one placeholder (a single
+# find-and-replace across both policy.yaml files) covers both agents at
+# once. Point this at a different real project instead if onboarding
+# ever gets routed to its own Jira project.
+#
 # ACTION NEEDED: same live-verified failure mode as order_renewal's own
 # blocking_tickets.jql -- REPLACE_WITH_... below is not a real Jira
 # project. An invalid key here won't error; it will just silently
@@ -56,7 +84,7 @@ salesforce:
 # real project key in your Jira site before trusting this check.
 blocking_tickets:
   jql: >-
-    project = REPLACE_WITH_YOUR_ONBOARDING_PROJECT_KEY AND status not in (Done, Closed)
+    project = REPLACE_WITH_YOUR_SUPPORT_PROJECT_KEY AND status not in (Done, Closed)
     AND summary ~ "{account_name}"
   blocking_issue_types: ["Onboarding", "Task"]
   blocking_labels: ["onboarding-in-progress"]
@@ -83,15 +111,27 @@ welcome_notice:
 # in that policy but was never wired into that graph -- this agent's
 # baseline makes tracking a first-class proposed step from the start).
 #
-# ACTION NEEDED: same caveat as blocking_tickets.jql above.
+# Same placeholder-reuse rationale as blocking_tickets.jql above: this
+# points at order_renewal's own default routing project
+# (REPLACE_WITH_YOUR_DEFAULT_JIRA_PROJECT_KEY in
+# order_renewal/policy.yaml's follow_up_routing), not a new,
+# onboarding-only placeholder -- one real project key to fill in covers
+# both agents. ACTION NEEDED: same caveat as blocking_tickets.jql above.
 onboarding_tracking:
-  project_key: "REPLACE_WITH_YOUR_ONBOARDING_PROJECT_KEY"
+  project_key: "REPLACE_WITH_YOUR_DEFAULT_JIRA_PROJECT_KEY"
   issue_type: "Onboarding"
 
 # Fields proposed on the Opportunity once the kickoff call and welcome
-# notice are both approved -- marks onboarding as started. Kept as data
-# since real picklist/custom-field names are specific to each
-# Salesforce org, same rationale as order_renewal's record_update.
+# notice are both approved -- marks onboarding as started. This writes
+# to the SAME New-Business Opportunity record `detect_node` found --
+# never the Account, mirroring order_renewal's own record_update
+# (which also targets the Opportunity, not the Account). The two agents
+# therefore never share or overwrite each other's status: order_renewal
+# tracks a *separate* Renewal-type Opportunity's StageName later, this
+# field is scoped to this one New-Business deal's onboarding lifecycle
+# and is never read or reused by order_renewal. Onboarding_Status__c
+# must carry the __c suffix -- Salesforce requires it on every custom
+# field's API name, regardless of what the field is labeled in the UI.
 record_update:
   fields_template:
     Onboarding_Status__c: "In Progress"

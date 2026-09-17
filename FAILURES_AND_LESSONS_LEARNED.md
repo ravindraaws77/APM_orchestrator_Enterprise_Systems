@@ -301,6 +301,48 @@ Shipped in [PR #2](https://github.com/ravindraaws77/APM_orchestrator_Enterprise_
 
 ---
 
+## 7. Customer-Onboarding implementation: a design-time near-miss, not a live bug
+
+Unlike every entry above, this one wasn't caught by running anything —
+Customer-Onboarding has no live end-to-end run yet (see
+`CUSTOMER_ONBOARDING_CONTRACT.md`'s "Status" section). It's included
+here anyway because it's the same *class* of mistake as #4 above, and
+would have become a live one if it had shipped as originally drafted.
+
+**What almost happened:** the baseline contract for this agent (drafted
+in an earlier session, reviewed and implemented in this one) specified
+`detect_node`'s Salesforce lookup as a single exact-match SOQL query:
+`WHERE Account.Name = '{account_name}'`. That is *exactly* the shape of
+query that already caused a real, live-verified failure in
+`order_renewal`'s own `verify_account_node` (a trailing period in the
+real account name silently returned zero rows) — the fix for which is
+now `apm_orchestrator`'s own `CLAUDE.md` non-negotiable rule: never
+match a Salesforce account by exact string equality alone.
+
+**Root cause of the near-miss:** mirroring an existing agent's *shape*
+(detect → verify → check blockers → propose → record) is not the same
+as mirroring its *current, already-debugged implementation*. The
+contract's own comparison table said this step was "Yes,
+live-verified elsewhere" — true of the general approach, but the actual
+SOQL template drafted alongside it had regressed to the exact-match-only
+version that approach was built to move past.
+
+**Fix:** before writing any code that depends on it, `policy.yaml`
+gained a `fallback_soql` (widened `LIKE` query), and `detect_node` was
+written from the start with the same normalized-name tie-break and
+`ambiguous_account` stop condition as `verify_account_node` — not
+retrofitted after a failure, because the non-negotiable rule was
+checked against *before* implementing, not after something broke.
+
+**Takeaway:** a documented non-negotiable rule earns its keep at the
+moment a new module is drafted, not just when a bug report shows up
+later. When copying an existing agent's proven shape for a new one,
+diff the new draft against the *current* implementation of the piece
+being mirrored — not just the general pattern description — since
+that's exactly where an already-fixed bug can silently reappear.
+
+---
+
 ## Reference
 
 - Runbook (execution guide, same test session): *Acme Renewal Runbook*
@@ -313,3 +355,6 @@ Shipped in [PR #2](https://github.com/ravindraaws77/APM_orchestrator_Enterprise_
   sessions that are now permanently guarded in code specifically
   because they were this same kind of live-verified, easy-to-repeat
   mistake.
+- `CUSTOMER_ONBOARDING_CONTRACT.md` — §7 above is this agent's own
+  design-time catch of the same account-matching mistake, made before
+  any code shipped rather than after a live run caught it.
