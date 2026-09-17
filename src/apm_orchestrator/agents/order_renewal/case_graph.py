@@ -518,6 +518,26 @@ async def start_case(
     account_name: str,
     raw_request: str = "",
 ) -> CaseOutcome:
+    # Re-invoking a case_id that already reached record_outcome
+    # (done=True) is a real, live-verified failure mode on Windows:
+    # ainvoke() doesn't cleanly restart or resume that thread -- it goes
+    # on to raise a genuine httpx connection error out of detect_node's
+    # very first apm_connectors call ("All connection attempts failed"),
+    # even though nothing about networking or config actually changed
+    # (the identical call always succeeds against a fresh case_id; every
+    # narrower isolated repro -- plain httpx, httpx alongside an open
+    # AsyncPostgresSaver connection, importing apm_orchestrator.tools,
+    # even a from-scratch build_case_graph()+start_case() call -- only
+    # failed once it reused an already-finished thread_id). Root cause
+    # not fully isolated; guard with an honest error instead of that
+    # misleading message.
+    existing = await graph.aget_state(_config(case_id))
+    if existing.values.get("done"):
+        raise ValueError(
+            f"Case {case_id!r} already finished ({existing.values.get('final_summary')!r}). "
+            "start_case never resumes or restarts a completed thread_id -- use a new case_id."
+        )
+
     await registry.register(case_id, agent="order_renewal")
     initial: CaseState = {
         "case_id": case_id,
