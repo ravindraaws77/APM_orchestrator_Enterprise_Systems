@@ -1,0 +1,315 @@
+# Failures and Lessons Learned
+
+A record of every real failure hit during live end-to-end testing of the
+Order-Renewal case across `apm_connectors` + `apm_orchestrator` (Windows,
+a real Neon-hosted Postgres, a real Salesforce Developer org, a real
+Gmail inbox, a real Jira project). Companion to the **Acme Renewal
+Runbook**, which documents how to *run* the test; this document is about
+everything that went wrong along the way, why, and what fixed it.
+
+Each entry follows the same shape: **Symptom → Investigation → Root
+cause → Fix → Takeaway**. The investigation steps are kept in, not
+trimmed down to just the answer — the point of this document is as much
+the debugging process as the individual bugs.
+
+---
+
+## 1. Environment / tooling failures
+
+### 1.1 — `psql` not installed, and "local Postgres" was actually wrong
+
+**Symptom:** `psql apm_connectors_dev -c "..."` failed with `'psql' is not
+recognized as an internal or external command`.
+
+**Investigation:**
+- Checked for a local Postgres Windows service (`sc query | findstr
+  /I postgres`) — nothing.
+- Checked for a Docker container (`docker ps`) — nothing.
+- Checked `netstat -ano | findstr :5432` — found active outbound
+  connections to a **remote** IP, not `127.0.0.1`.
+
+**Root cause:** There was no local Postgres server at all. Both
+databases were hosted on **Neon** (two separate projects, one per repo,
+both defaulting to the database name `neondb`) — a detail lost between
+sessions, where an earlier summary had described the setup as "local
+Postgres."
+
+**Fix:** Installed just the `psql` client (via `winget`, deselecting
+"PostgreSQL Server"/"Stack Builder" during install — no local server
+needed for a hosted DB), then added its `bin` folder to `PATH`.
+
+**Takeaway:** Don't trust an inherited description of an environment
+("local Postgres") over what the machine actually shows you. `netstat`
++ `sc query` + `docker ps` took under a minute to find the real setup.
+
+### 1.2 — cmd.exe silently truncates a connection string at `&`
+
+**Symptom:** `set CONNECTORS_DB_URL=postgresql://...?sslmode=require&channel_binding=require`
+typed unquoted in cmd.exe only assigned the part before `&` — cmd.exe
+treats `&` as a command separator on the raw command line, including
+inside a bare `set` assignment.
+
+**Fix:** Quote the whole `NAME=VALUE` pair, not just the value:
+`set "CONNECTORS_DB_URL=postgresql://...&channel_binding=require"`.
+
+**Takeaway:** A classic shell-quoting gotcha, worth knowing cold:
+cmd.exe's `&`/`|` interpretation is about where the *quote characters*
+are on the line, not about what "looks" quoted.
+
+### 1.3 — The real bug: a `postgresql://` URI argument breaks `-c` on Windows psql
+
+**Symptom:** `psql "postgresql://user:pass@host/db?sslmode=require&channel_binding=require" -c "SELECT 1;"`
+connected successfully (clean TLS handshake, correct database) but
+**`-c` never executed** — psql dropped into an interactive prompt
+instead, with `psql: warning: extra command-line argument "SELECT 1;"
+ignored`.
+
+**Investigation:**
+1. First hypothesis: the `&` again, just this time confusing psql's own
+   parsing rather than cmd.exe's. Tested by moving the URL into a
+   `set "VAR=..."` variable first (eliminating any raw `&` on the
+   command line at invocation time) — **same failure**. Ruled out `&`
+   entirely.
+2. Isolated further: dropped the URI positional argument completely and
+   set individual `PGHOST`/`PGPORT`/`PGUSER`/`PGPASSWORD`/`PGDATABASE`/
+   `PGSSLMODE` environment variables instead, then ran bare `psql -c
+   "SELECT 1;"` — **succeeded**, returned a real row.
+
+**Root cause:** Combining a `postgresql://`-style positional connection
+argument with `-c` on this Windows psql build (16.15) doesn't work —
+confirmed reproducible, mechanism not fully explained, but cleanly
+isolated to that specific combination.
+
+**Fix:** Never pass a connection URI as a positional argument on
+Windows when also using `-c`. Use per-variable `PGHOST`/`PGPASSWORD`/
+etc. instead, switching `PGHOST`/`PGPASSWORD` to move between the two
+repos' databases.
+
+**Takeaway:** When two plausible causes are both in play (a shell
+quoting issue *and* a client-side parsing issue), change **one variable
+at a time** and re-test — moving the URL into a shell variable isolated
+the shell from the equation in one step, and dropping the URI argument
+entirely isolated the client's own argument parser in the next.
+
+### 1.4 — Wrong column name: `apm_events.timestamp` doesn't exist
+
+**Symptom:** `psql -c "SELECT ... FROM apm_events ORDER BY timestamp;"`
+failed with `ERROR: column "timestamp" does not exist`.
+
+**Root cause:** The Python code's JSON representation of an event
+renames the column to `timestamp` for API consumers
+(`postgres_store.py`'s `_event_row_to_dict`), but the actual SQL column
+is `created_at`. Confirmed by reading `postgres_store.py`'s schema
+directly rather than guessing again.
+
+**Fix:** `ORDER BY created_at`, everywhere this query appeared (runbook,
+quick-reference, verification checklist).
+
+**Takeaway:** A one-line schema check (`_SCHEMA` in `postgres_store.py`)
+resolved this immediately — faster than a third guess would have been.
+
+---
+
+## 2. Windows shell / invocation failures
+
+- **`$(date +%s)` fails in both PowerShell and cmd.exe** — bash syntax,
+  neither shell understands it. Fix: just use a literal string like
+  `order-acme-1` for `case_id`; it never needed to be a timestamp.
+- **`apm-orchestrator-poller --once` doesn't exist** — the module
+  docstring documents `--once`, but the real `argparse` setup only
+  defines `--loop`/`--interval`; running with **no flags** is the
+  actual one-shot sweep. The docstring is stale relative to the code.
+- **Running `run_case.py order-acme-2 "Acme Corp"` without the `python`
+  prefix** fails with `'run_case.py' is not recognized...` — Windows
+  doesn't execute `.py` files as commands on its own. Needs `python
+  run_case.py ...`.
+- **A "Select an app to open this .py file" dialog** appeared from
+  double-clicking the script in an editor's file explorer — an
+  unrelated Windows file-association prompt, not something triggered by
+  or useful for running the script; dismiss it, don't pick an app.
+- **`psycopg.InterfaceError: Psycopg cannot use the 'ProactorEventLoop'`**
+  — Windows' default asyncio event loop isn't compatible with
+  `psycopg`'s async mode. Already fixed in this repo's own scripts via
+  `asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())`
+  on `sys.platform == "win32"`, before any asyncio-touching import.
+
+---
+
+## 3. Salesforce / test-data setup failures
+
+- **"Stay Tuned… we are setting things up"** — caused by navigating to
+  a placeholder example domain instead of the real org's domain (org
+  ids are random, e.g. `orgfarm-3037d31428-dev-ed`). Always copy the
+  domain from an already-logged-in browser tab.
+- **The "+" Global Actions menu has no "New Account"** — it's a
+  quick-create shortcut menu, not the App Launcher. Use the App
+  Launcher (grid icon) or navigate directly to
+  `<domain>/lightning/o/Account/new`.
+- **Creating the test Opportunity as "Closed Won" by default** — that's
+  the exact value the workflow's last step proposes setting it to;
+  starting there makes that step invisible and can trip validation
+  rules that block editing an already-closed Opportunity. Always create
+  it in an open stage.
+
+---
+
+## 4. API-contract gotchas (apm_connectors)
+
+- **`GET /processes/<id>/status` 404s immediately after proposing an
+  action** — not a bug. `/status` reads a table only written once
+  `execute_node` runs (i.e. after a decision); `/pending` is populated
+  immediately at propose time and works right away.
+- **Two different values are both called `action_id`** — the top-level
+  one (what every `/status`/`/decision` URL actually needs) and a
+  different, internal state-store id nested inside `pending_action`
+  that happens to share the field name. This is real enough that it's
+  now a non-negotiable rule in `apm_orchestrator`'s own `CLAUDE.md`, a
+  live-verified bug, and guarded in code (`_disambiguate_pending_action`
+  in `tools.py` strips the inner one so a tool result only ever has one
+  field named `action_id`).
+
+---
+
+## 5. The big one: reusing a finished `case_id` corrupts state and throws a misleading error
+
+This is the most involved investigation of the session, so it gets the
+full write-up.
+
+**Symptom:** Re-running `python run_case.py order-acme-2 "Acme Corp"` —
+a `case_id` that had already finished successfully in an earlier run —
+failed with:
+```
+Case order-acme-2 finished: detect failed: apm_connectors call to
+/tools/gmail/search failed: All connection attempts failed
+```
+This looked exactly like a network/infrastructure problem: `apm_connectors`
+unreachable, DNS/proxy misconfiguration, a Windows event-loop conflict,
+or similar.
+
+**Investigation (in the order actually run, each ruling out one variable):**
+
+| # | Test | Result |
+|---|------|--------|
+| 1 | `curl http://127.0.0.1:8000/health` | ✅ succeeds |
+| 2 | `curl -X POST http://127.0.0.1:8000/tools/gmail/search ...` | ✅ succeeds, real data |
+| 3 | Checked `apm_orchestrator`'s `APM_CONNECTORS_BASE_URL` | Correct, matches default |
+| 4 | Checked for `HTTP_PROXY`/`HTTPS_PROXY`/etc. env vars | None set |
+| 5 | `python -c "import httpx; print(httpx.get(...))"` (sync, bare) | ✅ succeeds |
+| 6 | Async `httpx.AsyncClient` + `asyncio.run()` (default `ProactorEventLoop`) | ✅ succeeds |
+| 7 | Same, but with `WindowsSelectorEventLoopPolicy` set first (matching `run_case.py`) | ✅ succeeds |
+| 8 | Same, but with a real `AsyncPostgresSaver` checkpointer connection held open concurrently | ✅ succeeds |
+| 9 | Same, but also importing `apm_orchestrator.tools` (which triggers `claude_agent_sdk`'s `create_sdk_mcp_server()` at import time) | ✅ succeeds |
+| 10 | A full, faithful copy of `run_case.py`'s logic (`CaseRegistry.setup()` → open checkpointer → `build_case_graph()` → `start_case()`) against a **fresh** `case_id` | ✅ succeeds — even reaches the correct blocked outcome |
+| 11 | The **real, unmodified** `run_case.py` against a **fresh** `case_id` (`order-acme-3`) | ✅ succeeds |
+| 12 | The **real, unmodified** `run_case.py` again against the **original, already-finished** `case_id` (`order-acme-2`) | ❌ fails, same error |
+
+Every isolated variable — networking, proxies, event loop policy, an
+open Postgres connection, the Claude Agent SDK import, even the full
+graph machinery — checked out fine. The **only** variable that
+correlated with the failure was reusing a `case_id` whose LangGraph
+checkpoint had already reached a terminal state (`done: true`).
+
+**A second, worse symptom, found while confirming this:** inspecting
+the corrupted case afterward with `show_case.py order-acme-2` showed a
+checkpoint that was internally self-contradictory:
+```json
+{
+  "blocked": true,
+  "blocker_reason": "KAN-9 (Task)",
+  "steps_completed": ["detect"],
+  "stop_reason": "detect failed: apm_connectors call to /tools/gmail/search failed: All connection attempts failed",
+  "final_summary": "detect failed: ...",
+  "done": true
+}
+```
+`blocked`/`blocker_reason` are left over from the *original* successful
+run; `stop_reason`/`final_summary`/the truncated `steps_completed` are
+from the *new*, failed re-run. Both are present at once, as if they
+happened in the same execution. This is because `CaseState` is a
+`TypedDict(total=False)` with no custom reducers — each node's return
+value only overwrites the specific keys it sets, so re-invoking with a
+fresh `initial` state (which explicitly resets `steps_completed: []`)
+merges on top of the *old* finished state instead of replacing it.
+
+**Root cause:** Not fully isolated at the LangGraph-internals level —
+*why* resuming/re-invoking a finished thread specifically manifests as
+an `httpx` connection failure (rather than, say, a LangGraph-level
+error) was never conclusively explained, despite the exhaustive
+elimination above. What *is* conclusively established: `start_case`
+was never designed to handle being called again for a `case_id` that
+already reached `record_outcome`, and doing so is both unsafe
+(checkpoint corruption) and confusing (a misleading error message).
+
+**Fix:** `start_case` (in `case_graph.py`) now checks the existing
+checkpoint via `graph.aget_state()` before invoking, and raises a clear,
+honest error instead of silently corrupting the thread:
+```python
+existing = await graph.aget_state(_config(case_id))
+if existing.values.get("done"):
+    raise ValueError(
+        f"Case {case_id!r} already finished ({existing.values.get('final_summary')!r}). "
+        "start_case never resumes or restarts a completed thread_id -- use a new case_id."
+    )
+```
+Live-verified fixed: the same `order-acme-2` re-run now raises
+`ValueError: Case 'order-acme-2' already finished (...)` instead of the
+misleading connection error, and no longer touches the checkpoint.
+Shipped in [PR #2](https://github.com/ravindraaws77/APM_orchestrator_Enterprise_Systems/pull/2).
+
+**Takeaways:**
+- **An error message describing a plausible cause is not evidence of
+  that cause.** "All connection attempts failed" pointed everywhere
+  except the actual variable that mattered (checkpoint reuse). The fix
+  was found only by systematically eliminating everything the message
+  *seemed* to implicate.
+- **Change one variable per test.** Twelve small, targeted tests beat
+  guessing at the full system — each one either confirmed or ruled out
+  exactly one thing.
+- **A "fresh case_id always works" pattern is itself a strong clue.**
+  Once noticed, it reframed the entire investigation from "what's wrong
+  with the network/event loop/imports" to "what's different about a
+  reused thread_id" — a much smaller, much more tractable question.
+- **Durable state (a LangGraph checkpoint, a database row, anything
+  keyed by an id meant to be created once) needs an explicit guard
+  against being reused**, the same way you'd guard against a duplicate
+  primary key — "the caller won't do that" is not a safe assumption for
+  a script anyone can invoke by hand with any string.
+- **A partial-update state model (no reducers, no reset) silently
+  merges old and new state on reuse.** Worth knowing as a general
+  LangGraph/state-machine pattern: `total=False` TypedDict state without
+  reducers means every node's dict return is a *patch*, not a
+  replacement — harmless for a single clean run, dangerous the moment
+  the same thread is invoked twice.
+
+---
+
+## 6. Git workflow failures
+
+- **`git pull origin main` refused with "untracked working tree files
+  would be overwritten by merge"** for `scripts/show_case.py` — a local
+  untracked draft of the same file PR #1 had already added upstream.
+  Resolved by moving the local file aside (`show_case.py.local-bak`),
+  pulling, then diffing the two to confirm nothing local-only was lost
+  before deleting the backup. (It was purely an earlier, less-polished
+  draft — no `DATABASE_URL` check, no friendly "no checkpoint found"
+  error, `sys.argv` instead of `argparse`.)
+- **A designated feature branch had already been merged mid-session**
+  (PR #1, then later PR #2 on a second branch) — new work after a merge
+  needs to continue from the merged history, never stack unrelated new
+  commits on top of a branch whose only content is already-merged, and
+  never assume a once-open PR is still the right place to keep pushing.
+
+---
+
+## Reference
+
+- Runbook (execution guide, same test session): *Acme Renewal Runbook*
+  (Claude Artifact).
+- [PR #1](https://github.com/ravindraaws77/APM_orchestrator_Enterprise_Systems/pull/1) — `show_case.py`.
+- [PR #2](https://github.com/ravindraaws77/APM_orchestrator_Enterprise_Systems/pull/2) — the `start_case` reused-`case_id` guard.
+- `CLAUDE.md`'s non-negotiable rules — several of today's near-misses
+  (the `action_id` disambiguation, the Salesforce account-matching
+  logic, the Jira placeholder project keys) are bugs from *previous*
+  sessions that are now permanently guarded in code specifically
+  because they were this same kind of live-verified, easy-to-repeat
+  mistake.
