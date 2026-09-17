@@ -1,0 +1,97 @@
+# Customer-Onboarding agent policy: what counts as "a new customer to
+# onboard", the SLA window to kick off within, and what blocks starting
+# onboarding. Data, not code, mirroring order_renewal/policy.yaml's own
+# shape and rationale (see docs/roadmap.md in apm_connectors: the next
+# business agent should be a new policy file + a different toolbelt
+# subset, not new plumbing).
+#
+# BASELINE CONTRACT ONLY -- see ../../../../CUSTOMER_ONBOARDING_CONTRACT.md
+# for the full design writeup. This file alone doesn't run anything yet:
+# there is no policy.py loader and no case_graph.py for this agent. It's
+# the shape the next implementation session builds both of those against,
+# the same way order_renewal/policy.yaml predates order_renewal/policy.py.
+
+# A new customer to onboard is detected from Salesforce directly (an
+# Opportunity just closed as new business), not from Gmail like
+# Order-Renewal -- onboarding starts from a CRM state change, not an
+# inbound email. {account_name} is filled in by the agent, same
+# convention as order_renewal's own SOQL templates.
+detection:
+  salesforce_new_customer_soql: >-
+    SELECT Id, Name, StageName, CloseDate, Type, AccountId, Account.Name
+    FROM Opportunity
+    WHERE Account.Name = '{account_name}'
+    AND StageName = 'Closed Won'
+    AND Type = 'New Business'
+    LIMIT 50
+  max_results: 20
+
+# Onboarding is only actionable within this window after the deal closed.
+sla:
+  onboarding_window_days: 14
+  # Days after close with no onboarding kicked off before it's treated
+  # as at-risk and escalated rather than proposed normally -- same
+  # escalation concept as order_renewal's escalation_threshold_days.
+  escalation_threshold_days: 5
+
+# SOQL used to pull the primary contact once the new customer is
+# confirmed -- who the welcome email and kickoff invite actually go to.
+# {account_id} is the AccountId from the detection query above.
+salesforce:
+  primary_contact_soql: >-
+    SELECT Id, Name, Email, Title
+    FROM Contact
+    WHERE AccountId = '{account_id}'
+    LIMIT 5
+
+# JQL used to check whether onboarding has already been kicked off for
+# this account -- blocks proposing a second kickoff call/welcome email
+# for the same customer if this case gets re-triggered. Same shape as
+# order_renewal's blocking_tickets.
+#
+# ACTION NEEDED: same live-verified failure mode as order_renewal's own
+# blocking_tickets.jql -- REPLACE_WITH_... below is not a real Jira
+# project. An invalid key here won't error; it will just silently
+# report "no existing onboarding" every time, forever. Set this to a
+# real project key in your Jira site before trusting this check.
+blocking_tickets:
+  jql: >-
+    project = REPLACE_WITH_YOUR_ONBOARDING_PROJECT_KEY AND status not in (Done, Closed)
+    AND summary ~ "{account_name}"
+  blocking_issue_types: ["Onboarding", "Task"]
+  blocking_labels: ["onboarding-in-progress"]
+
+# Best-effort: pull an existing welcome-packet/kickoff-checklist template
+# from Drive before proposing the kickoff call -- never blocks the case
+# if missing, same as order_renewal's pull_contract step.
+kickoff_packet:
+  drive_name_contains: "Onboarding Checklist"
+
+# Proposed steps, each behind its own separate human approval -- same
+# propose -> wait_for_approval -> next shape as order_renewal's
+# propose_call/propose_notice/propose_record_update.
+kickoff_call:
+  title_template: "Welcome & kickoff: {account_name}"
+  duration_minutes: 45
+
+welcome_notice:
+  subject_template: "Welcome to APM, {account_name}!"
+
+# Tracks onboarding progress as a real Jira ticket in the onboarding
+# team's own project -- never an ad hoc issue, same rationale as
+# order_renewal's follow_up_routing (which, per the Coverage Map, exists
+# in that policy but was never wired into that graph -- this agent's
+# baseline makes tracking a first-class proposed step from the start).
+#
+# ACTION NEEDED: same caveat as blocking_tickets.jql above.
+onboarding_tracking:
+  project_key: "REPLACE_WITH_YOUR_ONBOARDING_PROJECT_KEY"
+  issue_type: "Onboarding"
+
+# Fields proposed on the Opportunity once the kickoff call and welcome
+# notice are both approved -- marks onboarding as started. Kept as data
+# since real picklist/custom-field names are specific to each
+# Salesforce org, same rationale as order_renewal's record_update.
+record_update:
+  fields_template:
+    Onboarding_Status__c: "In Progress"
