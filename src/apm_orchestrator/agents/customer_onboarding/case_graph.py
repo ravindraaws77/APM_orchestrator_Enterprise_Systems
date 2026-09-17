@@ -106,8 +106,9 @@ def _most_recently_closed(records: list[dict[str, Any]]) -> dict[str, Any]:
     """The Opportunity most relevant to "a new customer to onboard right
     now" -- whichever CloseDate is the most recent, not just
     records[0]. Distinguishes a just-closed deal from an older
-    already-onboarded New Business Opportunity for the same account (an
-    expansion deal, say). A record with no CloseDate sorts last."""
+    already-onboarded Type='New Customer' Opportunity for the same
+    account (an expansion deal, say). A record with no CloseDate sorts
+    last."""
 
     def sort_key(record: dict[str, Any]) -> str:
         return record.get("fields", {}).get("CloseDate") or ""

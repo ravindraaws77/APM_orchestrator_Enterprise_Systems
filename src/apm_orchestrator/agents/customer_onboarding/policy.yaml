@@ -17,10 +17,17 @@
 # inbound email. {account_name} is filled in by the agent, same
 # convention as order_renewal's own SOQL templates.
 #
-# Confirmed against the real org: Type reliably distinguishes 'New
-# Business' from 'Renewal' on Opportunity, so this stays the detect
-# discriminator (see CUSTOMER_ONBOARDING_CONTRACT.md's resolved
-# decisions).
+# Live-checked against the real org during live-test prep (screenshot
+# review of the actual Opportunity Type dropdown): the assumption that
+# Type has 'New Business'/'Renewal' values was WRONG -- this org has
+# Salesforce's plain standard set instead: 'New Customer', 'Existing
+# Customer - Upgrade', 'Existing Customer - Replacement', 'Existing
+# Customer - Downgrade'. 'New Customer' is the real-world stand-in:
+# still a safe discriminator against any renewal/upgrade Opportunity,
+# which would be tagged 'Existing Customer - *' instead. See
+# CUSTOMER_ONBOARDING_CONTRACT.md's resolved decisions for the full
+# correction -- don't reintroduce 'New Business' here without
+# re-checking a real org's actual picklist values first.
 #
 # Deliberately NOT exact-match-only -- CLAUDE.md's non-negotiable rule
 # (never match a Salesforce account by exact string equality alone,
@@ -34,14 +41,14 @@ detection:
     FROM Opportunity
     WHERE Account.Name = '{account_name}'
     AND StageName = 'Closed Won'
-    AND Type = 'New Business'
+    AND Type = 'New Customer'
     LIMIT 50
   fallback_soql: >-
     SELECT Id, Name, StageName, CloseDate, Type, AccountId, Account.Name
     FROM Opportunity
     WHERE Account.Name LIKE '%{account_name}%'
     AND StageName = 'Closed Won'
-    AND Type = 'New Business'
+    AND Type = 'New Customer'
     LIMIT 200
   max_results: 20
 

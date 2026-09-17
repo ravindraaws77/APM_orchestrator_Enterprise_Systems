@@ -343,6 +343,72 @@ that's exactly where an already-fixed bug can silently reappear.
 
 ---
 
+## 8. Customer-Onboarding live-test prep: two assumptions that only broke once actually checked
+
+Both found *before* running any code against real infra — during the
+manual Salesforce/Jira setup walkthrough for this agent's live
+end-to-end test — by looking at the real system instead of trusting
+what the contract assumed. Neither is a code bug; both are the same
+underlying lesson twice in one session.
+
+### 8.1 — `onboarding_tracking.issue_type: "Onboarding"` isn't a real Jira issue type
+
+**Symptom:** none yet — caught by inspecting a screenshot of the real
+Jira board (`KAN` project) before running anything. The visible tickets
+(`KAN-1`, `KAN-4`, `KAN-5`) were all typed as **Task**; nothing showed
+an "Onboarding" type anywhere.
+
+**Root cause:** the baseline contract picked `"Onboarding"` as a
+plausible-sounding issue type without checking whether the real Jira
+project actually has it configured. Standard Jira Kanban-template
+projects only ship with Task/Bug/Story/Epic by default — "Onboarding"
+was never real.
+
+**Fix:** switched `blocking_tickets.blocking_issue_types` and
+`onboarding_tracking.issue_type` to `"Task"` — the one type
+live-checked to actually exist in this project, and the same fallback
+`order_renewal`'s own `blocking_issue_types` already leans on for
+exactly this reason (see that policy's own comment: "not every Jira
+site uses a dedicated escalation type").
+
+**Takeaway:** if this hadn't been caught here, `propose_onboarding_ticket_node`
+would have gotten all the way through detect/verify/check-blockers/
+kickoff-call/welcome-email, only to 400 on the *third* approval once a
+human finally approved it — the most expensive possible point to
+discover a made-up config value.
+
+### 8.2 — `Type = 'New Business'` isn't a real Opportunity picklist value either
+
+**Symptom:** none yet, same as above — caught by asking to see the
+actual `Type` dropdown on a new Opportunity record before selecting
+anything, rather than trusting a prior verbal confirmation.
+
+**What the contract assumed:** that the real Salesforce org's
+Opportunity `Type` field had `'New Business'` and `'Renewal'` values,
+based on answering "yes, let's go with this approach" to a direct
+question about it during contract review.
+
+**What was actually there:** Salesforce's plain standard picklist —
+`New Customer`, `Existing Customer - Upgrade`, `Existing Customer -
+Replacement`, `Existing Customer - Downgrade`. No `New Business`, no
+`Renewal`, ever.
+
+**Fix:** `detect`'s SOQL (both the exact-match and fallback templates)
+now filters on `Type = 'New Customer'` — the real value that serves the
+same purpose (a fresh deal, distinct from any `Existing Customer - *`
+renewal/upgrade Opportunity).
+
+**Takeaway:** a verbal "yes, that's accurate" answer about a system's
+configuration is not the same as checking the system. Both catches in
+this section happened only because the live-test walkthrough asked
+"show me the actual dropdown/board" instead of proceeding on a stated
+assumption — the same discipline as this document's very first entry
+(§1.1: "don't trust an inherited description of an environment over
+what the machine actually shows you"), just applied to picklist values
+and issue types instead of a database's location.
+
+---
+
 ## Reference
 
 - Runbook (execution guide, same test session): *Acme Renewal Runbook*

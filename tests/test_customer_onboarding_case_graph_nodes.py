@@ -39,7 +39,7 @@ def _opportunity(record_id="opp1", account_id="acc1", close_date="2026-09-10"):
     return {
         "record_id": record_id,
         "object_type": "Opportunity",
-        "fields": {"AccountId": account_id, "CloseDate": close_date, "Type": "New Business"},
+        "fields": {"AccountId": account_id, "CloseDate": close_date, "Type": "New Customer"},
     }
 
 

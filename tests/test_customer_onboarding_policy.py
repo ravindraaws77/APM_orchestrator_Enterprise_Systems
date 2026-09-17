@@ -4,7 +4,7 @@ from apm_orchestrator.agents.customer_onboarding.policy import load_policy
 def test_loads_bundled_default_policy():
     policy = load_policy()
 
-    assert "New Business" in policy.salesforce_detect_soql_template
+    assert "New Customer" in policy.salesforce_detect_soql_template
     assert "{account_name}" in policy.salesforce_detect_soql_template
     assert "{account_name}" in policy.salesforce_detect_fallback_soql_template
     assert "LIKE" in policy.salesforce_detect_fallback_soql_template

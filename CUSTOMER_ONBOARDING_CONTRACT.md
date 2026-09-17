@@ -82,21 +82,32 @@ Order-Renewal detects from Gmail (an inbound email mentioning a
 renewal) because a renewal conversation usually starts as a
 conversation. Onboarding doesn't wait for an email — it starts the
 moment a deal closes. Detecting it from a **Salesforce state change**
-(`StageName = 'Closed Won' AND Type = 'New Business'`) is both more
+(`StageName = 'Closed Won' AND Type = 'New Customer'`) is both more
 natural and removes a dependency: this agent's `detect` step needs no
 Gmail signal at all, only a SOQL query against data Order-Renewal
 already proves this system can query reliably.
 
-`Type = 'New Business'` is the discriminator that keeps this agent
-from firing on every renewal Order-Renewal itself closes (which also
-sets `StageName = 'Closed Won'`, per that agent's own
-`record_update.fields_template`) — the two agents would otherwise
-race on the exact same trigger condition.
+`Type = '{value}'` is the discriminator that keeps this agent from
+firing on every renewal Order-Renewal itself closes (which also sets
+`StageName = 'Closed Won'`, per that agent's own
+`record_update.fields_template`) — the two agents would otherwise race
+on the exact same trigger condition.
 
-**Resolved:** confirmed against the real Salesforce org that `Type`
-does reliably distinguish `New Business` from `Renewal` on
-Opportunity, so this stays the `detect` discriminator as originally
-drafted.
+**Corrected, not resolved as originally claimed:** this doc previously
+said "confirmed against the real org that `Type` distinguishes `New
+Business` from `Renewal`" based on a verbal answer, not an actual
+check. Live-checking the real org's Opportunity `Type` dropdown during
+live-test prep (screenshot review) found that assumption **wrong** —
+this org has no `New Business`/`Renewal` values at all, only
+Salesforce's plain standard set: `New Customer`, `Existing Customer -
+Upgrade`, `Existing Customer - Replacement`, `Existing Customer -
+Downgrade`. `Type = 'New Customer'` is the real-world equivalent: it
+still safely distinguishes a fresh deal from a renewal/upgrade
+Opportunity (which would be tagged `Existing Customer - *` instead),
+so the discriminator concept survives, just not the literal string.
+See `FAILURES_AND_LESSONS_LEARNED.md` for the full write-up — this is
+exactly the kind of assumption a verbal "yes, that works" answer can't
+actually verify; only checking the real picklist could.
 
 **A gap the original draft had and this implementation closed:**
 the draft's `detect` SOQL was exact-match-only
