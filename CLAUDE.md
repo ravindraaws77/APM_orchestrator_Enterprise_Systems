@@ -121,6 +121,7 @@ src/apm_orchestrator/
   cli.py               manual single-prompt smoke test (Supervisor)
 scripts/
   run_case.py          manually start one durable case
+  show_case.py         print one case's current/final checkpoint state
   e2e_smoke.py          real-server smoke test, no mocks
 tests/                 unit tests (mocked client, no infra) plus
                         test_case_graph_mechanics.py (real Postgres +
