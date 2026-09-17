@@ -31,18 +31,46 @@ style as `order_renewal`'s own `test_case_graph_nodes.py`):
   `tests/test_customer_onboarding_case_graph_nodes.py` — 9 tests, all
   passing.
 
+**Live-verified end to end (2026-09-17)**, real Salesforce org + real
+Jira site + real Gmail/Calendar account + real Neon Postgres, case
+`onboard-initrode-1` / account `Initrode Corp`, all 4 approval steps
+approved and executed for real:
+
+| Step | Real result |
+|---|---|
+| `detect` → `verify_contact` → `check_blockers` → `pull_kickoff_packet` | Found Opportunity `006ak00000b9V0sAAE` (`Type = 'New Customer'`), Contact with a real email, no blockers, no kickoff packet (best-effort, correctly non-blocking) |
+| `propose_kickoff_call` | Real Calendar event `tth7sjom9uv70hk4i4sbbalm7g` |
+| `propose_welcome_notice` | Real Gmail send, `message_id: 1a0b103408765020` |
+| `propose_onboarding_ticket` | Real Jira issue `KAN-10`, `issuetype: "Task"` |
+| `propose_record_update` | Real Salesforce update: `Onboarding_Status__c: "In Progress"` on that same Opportunity |
+
+Final state: `done: true`, `"Onboarding workflow completed for Initrode Corp."`
+
+This run is exactly why the two live-test-prep fixes earlier in this
+session mattered: `detect`'s SOQL used the real `Type = 'New Customer'`
+value (not the fictional `'New Business'` originally drafted), and
+`onboarding_tracking.issue_type` used the real `"Task"` (not the
+fictional `"Onboarding"`) — either fictional value would have made
+this run fail silently (a query matching nothing) or fail expensively
+(a 400 on the very last approval, after three real writes already
+executed). See `FAILURES_AND_LESSONS_LEARNED.md` section 8 for the
+full write-up of both catches, and `apm_connectors`'
+`docs/salesforce-jira-test-setup.md` for how to check a real org before
+writing a policy value in the first place.
+
 **Not done yet, by design:**
-- **No live end-to-end run.** Nothing here has been exercised against a
-  real Salesforce org, real Jira project, real Gmail/Calendar account,
-  or a real Postgres checkpointer — order_renewal's own
-  `test_case_graph_mechanics.py` (real Postgres + real server) has no
-  Customer-Onboarding equivalent yet. Live-verifying this the way
-  order_renewal's blocked path was live-verified (see
-  `FAILURES_AND_LESSONS_LEARNED.md`) is the natural next step, and is
-  likely to surface its own real-world surprises the same way that
-  session did.
-- The three placeholder/config items below still need real values
-  before any of this can be trusted end to end.
+- **No mechanics-level test.** `order_renewal`'s own
+  `test_case_graph_mechanics.py` (real Postgres, real interrupt/resume
+  mechanics, skipped unless configured) has no Customer-Onboarding
+  equivalent yet — this session's live run exercised the same mechanics
+  manually (via `run_case.py`/`apm-orchestrator-poller`/`show_case.py`)
+  but didn't turn it into an automated, repeatable test.
+- **The blocked path (`check_blockers` actually blocking) wasn't
+  exercised live** — only the happy path was. `order_renewal`'s own
+  blocked-path test (KAN-9) has no Customer-Onboarding equivalent yet.
+- **Rejection wasn't exercised live** — only approvals. The rejection
+  path is unit-tested (`test_rejection_at_kickoff_call_stops_the_chain`)
+  but not live-verified.
 
 ## Why this shape
 
@@ -64,17 +92,18 @@ mostly already live-verified:
 | Detect a new customer | Salesforce | `query_records` | Yes (`verify_account_node`) |
 | Verify the primary contact | Salesforce | `query_records` | Yes |
 | Check for an existing onboarding ticket | Jira | `search_issues` | Yes (`check_blockers_node`) |
-| Pull an existing welcome packet (best-effort) | Drive | `list_files`, `read_file` | **No** — flagged as a real gap in the Coverage Map |
-| Propose a kickoff call | Calendar | `create_event` | Yes |
-| Propose the welcome email | Gmail | `send_email` | Yes |
-| Propose an onboarding tracking ticket | Jira | `create_issue` | **No** — closes the exact Jira-write gap the Coverage Map flagged as never wired into any graph |
-| Update the Opportunity record | Salesforce | `update_record` | Yes |
+| Pull an existing welcome packet (best-effort) | Drive | `list_files`, `read_file` | **Partial** — the 2026-09-17 live run confirmed the *fallback* path (Drive unconfigured/no match → `pull_kickoff_packet:unavailable`, never blocks the case), but never actually exercised a successful Drive read against a real file, since no Drive folder was configured for that run |
+| Propose a kickoff call | Calendar | `create_event` | Yes (live-verified 2026-09-17, event `tth7sjom9uv70hk4i4sbbalm7g`) |
+| Propose the welcome email | Gmail | `send_email` | Yes (live-verified 2026-09-17, `message_id: 1a0b103408765020`) |
+| Propose an onboarding tracking ticket | Jira | `create_issue` | Yes (live-verified 2026-09-17, `KAN-10`) — closes the exact Jira-write gap the Coverage Map flagged as never wired into any graph |
+| Update the Opportunity record | Salesforce | `update_record` | Yes (live-verified 2026-09-17, `Onboarding_Status__c: "In Progress"`) |
 
-Implementing this agent closes two of the concrete gaps `COVERAGE_MAP`
-already identified (Drive read, Jira write) at the unit-test level —
-`pull_kickoff_packet_node`/`propose_onboarding_ticket_node` now exercise
-both, with mocked `ConnectorsClient` responses. Neither is
-**live-verified** yet (see "Status"); that's the next real gap to close.
+Implementing this agent closes both concrete gaps `COVERAGE_MAP`
+already identified: Jira write is now genuinely live-verified
+end-to-end (`KAN-10`); Drive read's *fallback* behavior is live-verified,
+but a real successful Drive read is still an open gap — set
+`APM_DRIVE_FOLDER_ID` with a real "Onboarding Checklist"-named file in
+it and re-run to close that one for real.
 
 ## Why detection is different from Order-Renewal
 
