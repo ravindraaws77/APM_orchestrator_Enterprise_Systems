@@ -101,9 +101,13 @@ async def test_check_blockers_stops_on_matching_issue_type(monkeypatch):
             return httpx.Response(
                 200,
                 json=[
+                    # "Task", not "Escalation" -- policy.yaml's
+                    # blocking_issue_types only lists "Task", the one
+                    # issue type live-checked to actually exist in a
+                    # real Jira site's configured work types.
                     {
                         "issue_key": "SUP-1",
-                        "issue_type": "Escalation",
+                        "issue_type": "Task",
                         "fields": {"labels": []},
                     }
                 ],

@@ -407,6 +407,42 @@ assumption — the same discipline as this document's very first entry
 what the machine actually shows you"), just applied to picklist values
 and issue types instead of a database's location.
 
+### 8.3 — Checking 8.1 for Customer-Onboarding surfaced the same bug already sitting in order_renewal
+
+**Symptom:** none — found by checking the real Jira site's actual
+configured work types (Space settings → Work types) as part of §8.1's
+fix, then asking "does `order_renewal`'s own policy have the same
+problem?" rather than assuming a bug fixed in one policy file couldn't
+also be lurking in the sibling one.
+
+**What was found:** this Jira site's real work types are exactly
+**Epic, Story, Task, Subtask** — confirmed by URL-navigating straight to
+`.../settings/issuetypes/...` rather than hunting through menus (a
+`chellagurkir.atlassian.net`-specific UI that names things "Spaces"/
+"Work types" instead of "Projects"/"Issue types", which cost a couple
+of wasted turns before the direct URL worked). `order_renewal/policy.yaml`'s
+`blocking_tickets.blocking_issue_types` was `["Escalation", "Bug",
+"Task"]` — two of those three (`Escalation`, `Bug`) were never real on
+this site either. Only `"Task"` ever actually matched anything, which
+is exactly why the KAN-9 blocked-path test from the original live
+session worked at all (that ticket was filed as a plain Task) — the
+other two entries were silently inert the whole time, not caught
+because they never needed to fire in that test.
+
+**Fix:** trimmed to `blocking_issue_types: ["Task"]`, the one
+live-checked value, with a comment pointing at how to verify a real
+site's work types before ever adding another guess back.
+
+**Takeaway:** an already-shipped, already-live-tested policy file is
+not automatically clean just because its one tested path passed. A
+JQL-matching list (or any "one of these values" check) can carry dead,
+unverified entries indefinitely without failing anything — they only
+get caught by explicitly checking the real system's configuration, not
+by a passing test that happens to only exercise the one real value in
+the list. Finding one instance of this mistake is a good moment to
+grep for the same *shape* of mistake elsewhere in the codebase, not
+just fix the instance in front of you.
+
 ---
 
 ## Reference
