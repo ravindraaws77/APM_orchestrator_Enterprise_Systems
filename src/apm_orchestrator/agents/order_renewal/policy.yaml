@@ -65,16 +65,26 @@ blocking_tickets:
     project = REPLACE_WITH_YOUR_SUPPORT_PROJECT_KEY AND status not in (Done, Closed)
     AND summary ~ "{account_name}"
   # Any of these issue types/labels on a matching ticket blocks the
-  # renewal until resolved. "Task" is included deliberately, not just
-  # "Escalation"/"Bug": a live-verified real blocker (a high-priority,
-  # SLA-impacting support issue) was filed as a plain "Task" with no
-  # labels, because not every Jira site uses a dedicated escalation
-  # type. Since `jql` above already narrows to open tickets whose
-  # summary mentions this account, erring toward "an unclassified open
-  # ticket about this account blocks until reviewed" is the safer
-  # default than silently missing it -- tune per your site's real
-  # issue-type taxonomy once you have one.
-  blocking_issue_types: ["Escalation", "Bug", "Task"]
+  # renewal until resolved. "Task" is included deliberately: a
+  # live-verified real blocker (a high-priority, SLA-impacting support
+  # issue) was filed as a plain "Task" with no labels, because not every
+  # Jira site uses a dedicated escalation type. Since `jql` above already
+  # narrows to open tickets whose summary mentions this account, erring
+  # toward "an unclassified open ticket about this account blocks until
+  # reviewed" is the safer default than silently missing it.
+  #
+  # "Escalation"/"Bug" used to be listed here too, on the same
+  # plausible-sounding-but-unchecked basis that broke
+  # customer_onboarding's own "Onboarding" issue type (see
+  # FAILURES_AND_LESSONS_LEARNED.md's live-test-prep section). Live-checked
+  # against this real Jira site's actual configured work types
+  # (Space settings -> Work types): only Epic/Story/Task/Subtask exist
+  # here, no "Escalation" or "Bug" -- removed rather than left as dead,
+  # unverified config. If your own Jira site genuinely has a dedicated
+  # escalation or bug type, check its real name (Project/Space settings
+  # -> Work types) before adding it back here -- don't guess a plausible
+  # one.
+  blocking_issue_types: ["Task"]
   blocking_labels: ["renewal-blocker"]
 
 # Where follow-up work for a renewal gets routed if it needs a partner

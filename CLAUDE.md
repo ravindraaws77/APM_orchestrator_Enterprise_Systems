@@ -90,6 +90,18 @@ not just an upcoming one. See
   the next agent's equivalent trigger is), SLA windows, and
   blocking-ticket rules belong in that agent's `policy.yaml`, loaded at
   run time — a policy change should never require a code change.
+- **Never hardcode a picklist value, issue type, or project key into a
+  `policy.yaml` without checking it against the real Salesforce/Jira
+  instance first.** A plausible-sounding one doesn't error — it just
+  silently matches nothing (a SOQL/JQL filter) or 400s only once a
+  write is finally approved (`jira_create_issue`'s `issuetype`), the
+  most expensive point to find out. Two real examples that shipped
+  before being checked: `Type = 'New Business'` (the real org only has
+  `New Customer`/`Existing Customer - *`) and `issue_type: "Onboarding"`
+  (the real Jira project only has Epic/Story/Task/Subtask) — see
+  `FAILURES_AND_LESSONS_LEARNED.md`'s live-test-prep section for both,
+  and `apm_connectors`' `docs/salesforce-jira-test-setup.md` for how to
+  actually check.
 - **A business-process agent's durable state is a LangGraph case graph,
   not the Claude Agent SDK's own conversation loop.** `agent.py`
   (Claude Agent SDK, agentic tool-use) and `case_graph.py` (LangGraph,

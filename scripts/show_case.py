@@ -1,6 +1,6 @@
-"""Print one Order-Renewal case's current (or final, if it's finished)
-CaseState -- the same LangGraph checkpoint scripts/run_case.py and
-poller.py read/resume, surfaced read-only for manual inspection.
+"""Print one case's current (or final, if it's finished) CaseState --
+the same LangGraph checkpoint scripts/run_case.py and poller.py
+read/resume, surfaced read-only for manual inspection.
 
 Useful once a case has finished (run_case.py's own completion message
 doesn't repeat on demand) or any time you want to see exactly what's
@@ -10,6 +10,7 @@ apm_connectors' own API.
 
 Usage:
     python scripts/show_case.py acme-2026-09-15
+    python scripts/show_case.py --agent customer_onboarding onboard-acme-2026-09-17
 """
 
 from __future__ import annotations
@@ -29,17 +30,27 @@ if sys.platform == "win32":
 
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 
-from apm_orchestrator.agents.order_renewal.case_graph import build_case_graph
+import apm_orchestrator.agents.customer_onboarding.case_graph as customer_onboarding_case_graph
+import apm_orchestrator.agents.order_renewal.case_graph as order_renewal_case_graph
 from apm_orchestrator.config import load_settings
 
+# Same dispatch table as run_case.py -- each agent's checkpoint is read
+# through its own build_case_graph, since CaseState's shape differs
+# per agent (see run_case.py's own comment on this).
+AGENT_MODULES = {
+    "order_renewal": order_renewal_case_graph,
+    "customer_onboarding": customer_onboarding_case_graph,
+}
 
-async def main(case_id: str) -> None:
+
+async def main(agent: str, case_id: str) -> None:
     settings = load_settings()
     if not settings.database_url:
         raise SystemExit("DATABASE_URL is required to inspect a case")
 
+    module = AGENT_MODULES[agent]
     async with AsyncPostgresSaver.from_conn_string(settings.database_url) as checkpointer:
-        graph = build_case_graph(checkpointer)
+        graph = module.build_case_graph(checkpointer)
         snapshot = await graph.aget_state({"configurable": {"thread_id": case_id}})
 
     if not snapshot.values:
@@ -50,6 +61,12 @@ async def main(case_id: str) -> None:
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument(
+        "--agent",
+        choices=sorted(AGENT_MODULES),
+        default="order_renewal",
+        help="Which business agent started this case (default: order_renewal)",
+    )
     parser.add_argument("case_id")
     args = parser.parse_args()
-    asyncio.run(main(args.case_id))
+    asyncio.run(main(args.agent, args.case_id))
