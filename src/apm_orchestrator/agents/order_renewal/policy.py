@@ -9,7 +9,6 @@ docs/roadmap.md in apm_connectors).
 
 from __future__ import annotations
 
-import os
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -17,12 +16,6 @@ from typing import Any
 import yaml
 
 _DEFAULT_POLICY_PATH = Path(__file__).parent / "policy.yaml"
-# Lets a real, org-specific policy.yaml (e.g. with real Jira project
-# keys instead of the tracked file's REPLACE_WITH_... placeholders)
-# live outside version control -- see .env.example. Previously only
-# honored by agent.py's explicit policy_path param, never by
-# case_graph.py's load_policy() calls -- this makes it work everywhere.
-_POLICY_PATH_ENV_VAR = "ORDER_RENEWAL_POLICY_PATH"
 
 
 @dataclass(frozen=True)
@@ -88,7 +81,7 @@ class OrderRenewalPolicy:
 
 
 def load_policy(path: str | Path | None = None) -> OrderRenewalPolicy:
-    policy_path = Path(path) if path else Path(os.environ.get(_POLICY_PATH_ENV_VAR) or _DEFAULT_POLICY_PATH)
+    policy_path = Path(path) if path else _DEFAULT_POLICY_PATH
     with policy_path.open("r", encoding="utf-8") as fh:
         raw = yaml.safe_load(fh)
     return OrderRenewalPolicy(raw=raw)

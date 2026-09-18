@@ -4,9 +4,3 @@ __pycache__/
 .venv/
 *.egg-info/
 .pytest_cache/
-
-# Local policy overrides with real, org-specific values (e.g. a real
-# Jira project key) -- see .env.example's *_POLICY_PATH variables.
-# The tracked policy.yaml files must keep their REPLACE_WITH_...
-# placeholders.
-policy.local.*.yaml
