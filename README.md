@@ -80,6 +80,20 @@ cp .env.example .env   # fill in ANTHROPIC_API_KEY, APM_CONNECTORS_BASE_URL, etc
 apm-orchestrator "Acme Corp emailed asking to renew their annual license."
 ```
 
+Before running against your own Salesforce/Jira org, edit each agent's
+`policy.yaml` (`agents/order_renewal/policy.yaml`,
+`agents/customer_onboarding/policy.yaml`) and replace every
+`REPLACE_WITH_...` placeholder with a real value from your org (Jira
+project keys especially -- see each file's `ACTION NEEDED` comments for
+why a plausible-looking but wrong one fails silently or late instead of
+at startup). These are the only per-org customization points; everything
+else in `policy.yaml` is meant to be edited freely as your own business
+rules change, per `CLAUDE.md`'s "policy is data, not code" convention.
+
+If you're contributing changes back upstream, keep the `REPLACE_WITH_...`
+placeholders in your commits -- both repos are public, and a real
+project key belongs only in your own local checkout, not in a shared PR.
+
 ### Running a durable case (Postgres required)
 
 ```bash

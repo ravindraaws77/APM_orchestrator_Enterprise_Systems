@@ -22,6 +22,9 @@ def test_route_for_falls_back_to_default_project():
 def test_route_for_matches_configured_tag():
     policy = load_policy()
 
+    # Asserts route_for returns the matched route's own key, not merely
+    # a fallback that happens to coincide with it -- doesn't assume it
+    # differs from default_project_key, since a real deployment running
+    # one Jira project for everything sets every route to the same key.
     matched = policy.route_for("enterprise")
     assert matched == policy.raw["follow_up_routing"]["routes"][1]["project_key"]
-    assert matched != policy.raw["follow_up_routing"]["default_project_key"]
