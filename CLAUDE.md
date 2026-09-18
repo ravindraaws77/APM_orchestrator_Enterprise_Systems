@@ -112,6 +112,13 @@ not just an upcoming one. See
   approval-gate graph.
 - Never commit secrets. `.env.example` documents required variables;
   real values go in a local, gitignored `.env`.
+- A real, org-specific `policy.yaml` (e.g. a real Jira project key
+  instead of a `REPLACE_WITH_...` placeholder) never gets committed
+  either, even though it isn't a credential -- both repos are public,
+  and the tracked `policy.yaml` files must stay generic. Point
+  `ORDER_RENEWAL_POLICY_PATH` / `CUSTOMER_ONBOARDING_POLICY_PATH` (see
+  `.env.example`) at a local `policy.local.*.yaml` copy instead
+  (gitignored); `load_policy()` in each agent's `policy.py` honors it.
 - Adding a new `@tool` to `tools.py` is additive; changing an existing
   one's `input_schema` to match a breaking change in `apm_connectors`'
   own `/tools/*` contract needs both repos updated together.

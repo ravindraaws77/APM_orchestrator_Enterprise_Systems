@@ -6,6 +6,7 @@ data, so a policy change is a config edit, not a code change.
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -13,6 +14,10 @@ from typing import Any
 import yaml
 
 _DEFAULT_POLICY_PATH = Path(__file__).parent / "policy.yaml"
+# Lets a real, org-specific policy.yaml (e.g. with a real Jira project
+# key instead of the tracked file's REPLACE_WITH_... placeholder) live
+# outside version control -- see .env.example.
+_POLICY_PATH_ENV_VAR = "CUSTOMER_ONBOARDING_POLICY_PATH"
 
 
 @dataclass(frozen=True)
@@ -85,7 +90,7 @@ class CustomerOnboardingPolicy:
 
 
 def load_policy(path: str | Path | None = None) -> CustomerOnboardingPolicy:
-    policy_path = Path(path) if path else _DEFAULT_POLICY_PATH
+    policy_path = Path(path) if path else Path(os.environ.get(_POLICY_PATH_ENV_VAR) or _DEFAULT_POLICY_PATH)
     with policy_path.open("r", encoding="utf-8") as fh:
         raw = yaml.safe_load(fh)
     return CustomerOnboardingPolicy(raw=raw)
