@@ -445,10 +445,59 @@ just fix the instance in front of you.
 
 ---
 
+## 9. Supervisor routing: live-verified for the first time, and it held up on an adversarial case
+
+Unlike every entry above, this one isn't a bug — it's the closing of a
+gap this document itself flagged: every real run so far (`order-acme-*`,
+`onboard-initrode-1`) called each agent's `case_graph.py` directly via
+`run_case.py --agent ...`, entirely bypassing `supervisor.py`. Its
+system prompt claims Order-Renewal and Customer-Onboarding "never
+overlap," and both delegate tools' descriptions warn against routing on
+a mentioned connector/keyword instead of actual business intent — none
+of that had ever been exercised against a real request.
+
+**What was tested:** `scripts/test_supervisor_routing.py`, a new script
+that calls `run_supervisor()`'s real code path (not `cli.py`, which
+discards which tool got called) and traces which delegate tool, if any,
+the Supervisor actually invokes. Three cases, run against the real
+Claude API:
+
+1. A clean Order-Renewal request ("Acme Corp's license is coming up for
+   renewal... extend their existing contract").
+2. A clean Customer-Onboarding request ("We just closed-won a brand-new
+   deal with Initrode Corp -- kick off their onboarding").
+3. A deliberately adversarial one: an *existing* customer (Order-Renewal
+   territory by the system prompt's own definition) with an expansion
+   deal, phrased using Customer-Onboarding's own vocabulary and proposed
+   actions ("Schedule a kickoff call and send them a welcome email for
+   the new product").
+
+**Result:** cases 1 and 2 routed correctly. Case 3 — the one built to
+tempt keyword-matching — routed to *neither* delegate. The Supervisor's
+own words: *"I'm not routing this one, because it doesn't cleanly belong
+to either specialist I have — and guessing would be worse than
+stopping,"* followed by a specific breakdown of why Order-Renewal fits
+the customer relationship but Customer-Onboarding fits the requested
+actions, and why that conflict isn't its call to resolve unilaterally.
+
+**Takeaway:** this is the first live evidence that `supervisor.py`'s
+routing does what its system prompt and tool descriptions claim, on a
+case built specifically to break that claim (existing-customer intent
+paired with onboarding-shaped requested actions). It's also a reminder
+that a documented behavioral claim ("never routes on keyword") is
+exactly as untested as a documented bug fix until something actually
+exercises the adversarial input — the same discipline as every other
+entry in this document, just applied to a prompt-engineering claim
+instead of a code path.
+
+---
+
 ## Reference
 
 - Runbook (execution guide, same test session): *Acme Renewal Runbook*
   (Claude Artifact).
+- `scripts/test_supervisor_routing.py` — the live Supervisor-routing
+  test behind §9 above.
 - [PR #1](https://github.com/ravindraaws77/APM_orchestrator_Enterprise_Systems/pull/1) — `show_case.py`.
 - [PR #2](https://github.com/ravindraaws77/APM_orchestrator_Enterprise_Systems/pull/2) — the `start_case` reused-`case_id` guard.
 - `CLAUDE.md`'s non-negotiable rules — several of today's near-misses

@@ -194,22 +194,26 @@ targets the Opportunity it verified, not the Account. Concretely:
   different design — a field on `Account` both agents write to — and
   wasn't asked for here.)
 
-## What's a placeholder, not a real value
+## What used to be a placeholder, now a real value
 
 Same convention, same reasoning, as `order_renewal/policy.yaml`'s own
-`REPLACE_WITH_...` markers (live-verified failure mode there:
-a plausible-but-fictional Jira project key doesn't error, it silently
-returns zero results forever).
+`REPLACE_WITH_...` markers started out (live-verified failure mode
+there: a plausible-but-fictional Jira project key doesn't error, it
+silently returns zero results forever).
 
-**Resolved:** rather than introduce a new, onboarding-only placeholder,
-`blocking_tickets.jql` and `onboarding_tracking.project_key` were
-pointed at the exact same placeholder strings `order_renewal/policy.yaml`
-already uses (`REPLACE_WITH_YOUR_SUPPORT_PROJECT_KEY` and
-`REPLACE_WITH_YOUR_DEFAULT_JIRA_PROJECT_KEY` respectively) — this
-portfolio runs both agents against one real Jira project, so a single
-find-and-replace across both `policy.yaml` files fills in both agents
-at once. Point either at a different real project instead if
-onboarding ever needs its own.
+**Resolved, then resolved again:** rather than introduce a new,
+onboarding-only placeholder, `blocking_tickets.jql` and
+`onboarding_tracking.project_key` were pointed at the exact same
+placeholder string `order_renewal/policy.yaml` already used — one
+find-and-replace across both `policy.yaml` files would fill in both
+agents at once. A later session tried keeping the real value out of
+both tracked files entirely (a gitignored local-override YAML +
+`*_POLICY_PATH` env vars), found that added more moving parts than it
+was worth for a single-maintainer setup, and reverted it: both files
+now carry the real project key (`KAN`) directly, with `SETUP` comments
+marking it as the one thing to replace for a different Jira org. Point
+either agent's `project_key`/`jql` at a different real project instead
+if onboarding ever needs its own.
 
 ## What's still not done
 
