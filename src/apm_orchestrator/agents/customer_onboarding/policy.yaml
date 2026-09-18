@@ -75,23 +75,22 @@ salesforce:
 # for the same customer if this case gets re-triggered. Same shape as
 # order_renewal's blocking_tickets.
 #
-# Deliberately points at the SAME placeholder string as
-# order_renewal/policy.yaml's own blocking_tickets.jql
-# (REPLACE_WITH_YOUR_SUPPORT_PROJECT_KEY) rather than a new
-# onboarding-specific one: this portfolio runs both agents against one
-# real Jira project, so filling in that one placeholder (a single
-# find-and-replace across both policy.yaml files) covers both agents at
-# once. Point this at a different real project instead if onboarding
+# Deliberately uses the SAME real project key as
+# order_renewal/policy.yaml's own blocking_tickets.jql rather than a
+# separate onboarding-specific one: this portfolio runs both agents
+# against one real Jira project ("KAN"), so setting one project key (a
+# single find-and-replace across both policy.yaml files) covers both
+# agents. Point this at a different real project instead if onboarding
 # ever gets routed to its own Jira project.
 #
-# ACTION NEEDED: same live-verified failure mode as order_renewal's own
-# blocking_tickets.jql -- REPLACE_WITH_... below is not a real Jira
-# project. An invalid key here won't error; it will just silently
-# report "no existing onboarding" every time, forever. Set this to a
-# real project key in your Jira site before trusting this check.
+# SETUP: same live-verified failure mode as order_renewal's own
+# blocking_tickets.jql -- if you're standing this up against a
+# different Jira site, "KAN" below is this deployment's own project
+# key, not a universal default; a wrong key here won't error, it will
+# just silently report "no existing onboarding" every time, forever.
 blocking_tickets:
   jql: >-
-    project = REPLACE_WITH_YOUR_SUPPORT_PROJECT_KEY AND status not in (Done, Closed)
+    project = KAN AND status not in (Done, Closed)
     AND summary ~ "{account_name}"
   # "Onboarding" isn't a real issue type in a standard Jira Kanban-template
   # project (live-checked: only Task/Bug/Story/Epic exist by default) --
@@ -123,12 +122,12 @@ welcome_notice:
 # in that policy but was never wired into that graph -- this agent's
 # baseline makes tracking a first-class proposed step from the start).
 #
-# Same placeholder-reuse rationale as blocking_tickets.jql above: this
-# points at order_renewal's own default routing project
-# (REPLACE_WITH_YOUR_DEFAULT_JIRA_PROJECT_KEY in
-# order_renewal/policy.yaml's follow_up_routing), not a new,
-# onboarding-only placeholder -- one real project key to fill in covers
-# both agents. ACTION NEEDED: same caveat as blocking_tickets.jql above.
+# Same real-project reuse as blocking_tickets.jql above: this uses the
+# same "KAN" project as order_renewal's own default routing project
+# (order_renewal/policy.yaml's follow_up_routing), not a separate
+# onboarding-only key -- one real project key covers both agents. SETUP:
+# same caveat as blocking_tickets.jql above if you're on a different
+# Jira site.
 #
 # issue_type is "Task", not "Onboarding" -- live-checked against a real
 # Jira Kanban-template project (screenshot review during this session's
@@ -138,7 +137,7 @@ welcome_notice:
 # this only if your Jira site has genuinely added a real "Onboarding"
 # (or similar) issue type.
 onboarding_tracking:
-  project_key: "REPLACE_WITH_YOUR_DEFAULT_JIRA_PROJECT_KEY"
+  project_key: "KAN"
   issue_type: "Task"
 
 # Fields proposed on the Opportunity once the kickoff call and welcome

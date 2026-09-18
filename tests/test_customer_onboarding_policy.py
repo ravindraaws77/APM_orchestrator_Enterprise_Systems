@@ -1,4 +1,5 @@
 from apm_orchestrator.agents.customer_onboarding.policy import load_policy
+from apm_orchestrator.agents.order_renewal.policy import load_policy as load_order_renewal_policy
 
 
 def test_loads_bundled_default_policy():
@@ -22,11 +23,13 @@ def test_record_update_targets_onboarding_status_custom_field():
     assert any(name.endswith("__c") for name in fields)
 
 
-def test_onboarding_tracking_and_blocking_tickets_share_order_renewal_placeholders():
-    """Deliberately points at the same REPLACE_WITH_... placeholders as
-    order_renewal/policy.yaml -- one real Jira project key fills in both
-    agents at once. See policy.yaml's own comments for the rationale."""
+def test_onboarding_tracking_and_blocking_tickets_share_order_renewal_project_key():
+    """Deliberately points at the same real Jira project key as
+    order_renewal/policy.yaml -- one real key fills in both agents at
+    once. See policy.yaml's own comments for the rationale."""
     policy = load_policy()
+    order_renewal_policy = load_order_renewal_policy()
 
-    assert policy.onboarding_tracking_project_key == "REPLACE_WITH_YOUR_DEFAULT_JIRA_PROJECT_KEY"
-    assert "REPLACE_WITH_YOUR_SUPPORT_PROJECT_KEY" in policy.blocking_jql_template
+    assert policy.onboarding_tracking_project_key == order_renewal_policy.raw["follow_up_routing"]["default_project_key"]
+    assert f"project = {policy.onboarding_tracking_project_key} " in policy.blocking_jql_template
+    assert f"project = {policy.onboarding_tracking_project_key} " in order_renewal_policy.blocking_jql_template

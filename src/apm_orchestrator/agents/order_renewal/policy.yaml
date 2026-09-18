@@ -53,16 +53,16 @@ sla:
 # notice or closing the Opportunity (e.g. an open support escalation
 # against the same account).
 #
-# ACTION NEEDED: "REPLACE_WITH_YOUR_SUPPORT_PROJECT_KEY" is not a real
-# Jira project -- live-verified failure mode: a plausible-looking but
-# fictional key here doesn't error, it just returns zero results
-# forever, so this check silently reports "no blockers" on *every*
-# account, permanently. That's worse than a loud failure. Set this to a
-# real project key in your Jira site before trusting this check for
-# anything.
+# SETUP: "KAN" below is this deployment's own Jira project key, not a
+# universal default -- if you're standing this up against a different
+# Jira site, replace it with a real project key from *your* site before
+# trusting this check for anything. Live-verified failure mode: a
+# plausible-looking but fictional/wrong key here doesn't error, it just
+# returns zero results forever, so this check silently reports "no
+# blockers" on *every* account, permanently -- worse than a loud failure.
 blocking_tickets:
   jql: >-
-    project = REPLACE_WITH_YOUR_SUPPORT_PROJECT_KEY AND status not in (Done, Closed)
+    project = KAN AND status not in (Done, Closed)
     AND summary ~ "{account_name}"
   # Any of these issue types/labels on a matching ticket blocks the
   # renewal until resolved. "Task" is included deliberately: a
@@ -91,19 +91,22 @@ blocking_tickets:
 # or another internal team, per docs/roadmap.md: "a Jira project, not an
 # ad hoc issue".
 #
-# ACTION NEEDED: same caveat as blocking_tickets.jql above -- these are
-# placeholder examples, not real projects. Set every project_key below
-# to one that actually exists in your Jira site (an invalid one here
-# 400s only when a real proposal finally reaches it, not at startup).
+# SETUP: same caveat as blocking_tickets.jql above -- "KAN" below is
+# this deployment's own project key, used for all three routes since
+# this deployment only runs one real Jira project. Set every
+# project_key below to one that actually exists in *your* Jira site (an
+# invalid one here 400s only when a real proposal finally reaches it,
+# not at startup); use different keys per route if your org actually
+# routes partner-ops/enterprise-success work to separate projects.
 follow_up_routing:
-  default_project_key: "REPLACE_WITH_YOUR_DEFAULT_JIRA_PROJECT_KEY"
+  default_project_key: "KAN"
   # Maps a detected keyword/account attribute to a specific Jira
   # project/component -- extend per real team/partner as they're onboarded.
   routes:
     - match: "partner_managed"
-      project_key: "REPLACE_WITH_YOUR_PARTNER_OPS_PROJECT_KEY"
+      project_key: "KAN"
     - match: "enterprise"
-      project_key: "REPLACE_WITH_YOUR_ENTERPRISE_SUCCESS_PROJECT_KEY"
+      project_key: "KAN"
 
 # Reporting cadence (Excel), explicitly separate from and lower-stakes
 # than the live workflow -- Salesforce stays the system of record.
