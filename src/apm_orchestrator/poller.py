@@ -1,8 +1,9 @@
-"""Standalone poller: resumes in-flight Order-Renewal cases once their
+"""Standalone poller: resumes in-flight business-process cases once their
 apm_connectors pending action resolves. Deliberately decoupled from the
-Supervisor and the case graph's own starting path -- it only knows how
-to (1) find in-flight cases and (2) check + resume them, so it can be
-deployed and scheduled independently of everything else in this repo.
+Supervisor and each case graph's own starting path -- it only knows how
+to (1) find in-flight cases per agent and (2) check + resume them, so it
+can be deployed and scheduled independently of everything else in this
+repo.
 
 Two ways to run it, same sweep either way:
 
@@ -28,18 +29,67 @@ from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 if sys.platform == "win32":
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
-from apm_orchestrator.agents.order_renewal.case_graph import build_case_graph, resume_case
+import apm_orchestrator.agents.customer_onboarding.case_graph as customer_onboarding_case_graph
+import apm_orchestrator.agents.order_renewal.case_graph as order_renewal_case_graph
 from apm_orchestrator.config import load_settings
 from apm_orchestrator.db import CaseRegistry
 from apm_orchestrator.tools import aclose_client, get_client
 
 logger = logging.getLogger("apm_orchestrator.poller")
 
+# One sweep checks every registered agent -- adding a new business agent
+# (per docs/roadmap.md's "decomposed by business process") means adding
+# its case_graph module here, never new poller logic.
+AGENT_MODULES = {
+    "order_renewal": order_renewal_case_graph,
+    "customer_onboarding": customer_onboarding_case_graph,
+}
+
+
+async def _sweep_agent(agent: str, module, registry: CaseRegistry, checkpointer, client) -> int:
+    graph = module.build_case_graph(checkpointer)
+    resumed = 0
+
+    for case_id in await registry.list_case_ids(agent=agent):
+        config = {"configurable": {"thread_id": case_id}}
+        snapshot = await graph.aget_state(config)
+
+        if not snapshot.interrupts:
+            continue  # finished already, or never actually paused
+
+        pending_action = snapshot.values.get("pending_action")
+        action_id = snapshot.values.get("action_id")
+        if not pending_action or not action_id:
+            continue
+
+        status = await client.get_action_status(action_id)
+        if status is None:
+            logger.debug("case %s still awaiting a human decision", case_id)
+            continue
+
+        outcome = await module.resume_case(
+            graph,
+            case_id,
+            approved=bool(status["result"].get("executed")),
+            final_result=status["result"],
+        )
+        logger.info(
+            "resumed case %s (%s, %s) -- done=%s%s",
+            case_id,
+            agent,
+            pending_action.get("tool"),
+            outcome.done,
+            "" if outcome.done else f", now awaiting {outcome.step!r}",
+        )
+        resumed += 1
+
+    return resumed
+
 
 async def sweep_once(database_url: str) -> int:
-    """Check every registered Order-Renewal case once; resume any whose
-    apm_connectors pending action has resolved (approved or rejected).
-    Returns how many cases it resumed."""
+    """Check every registered case (across every business agent) once;
+    resume any whose apm_connectors pending action has resolved
+    (approved or rejected). Returns how many cases it resumed."""
     registry = CaseRegistry(database_url)
     await registry.setup()
     client = get_client()
@@ -47,39 +97,8 @@ async def sweep_once(database_url: str) -> int:
 
     async with AsyncPostgresSaver.from_conn_string(database_url) as checkpointer:
         await checkpointer.setup()
-        graph = build_case_graph(checkpointer)
-
-        for case_id in await registry.list_case_ids(agent="order_renewal"):
-            config = {"configurable": {"thread_id": case_id}}
-            snapshot = await graph.aget_state(config)
-
-            if not snapshot.interrupts:
-                continue  # finished already, or never actually paused
-
-            pending_action = snapshot.values.get("pending_action")
-            action_id = snapshot.values.get("action_id")
-            if not pending_action or not action_id:
-                continue
-
-            status = await client.get_action_status(action_id)
-            if status is None:
-                logger.debug("case %s still awaiting a human decision", case_id)
-                continue
-
-            outcome = await resume_case(
-                graph,
-                case_id,
-                approved=bool(status["result"].get("executed")),
-                final_result=status["result"],
-            )
-            logger.info(
-                "resumed case %s (%s) -- done=%s%s",
-                case_id,
-                pending_action.get("tool"),
-                outcome.done,
-                "" if outcome.done else f", now awaiting {outcome.step!r}",
-            )
-            resumed += 1
+        for agent, module in AGENT_MODULES.items():
+            resumed += await _sweep_agent(agent, module, registry, checkpointer, client)
 
     return resumed
 
