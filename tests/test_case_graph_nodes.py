@@ -8,6 +8,7 @@ interrupt/Postgres/poller mechanism against live infra.
 from __future__ import annotations
 
 import json
+import logging
 
 import httpx
 import pytest
@@ -190,3 +191,29 @@ async def test_full_happy_path_pauses_at_propose_call_then_rejection_stops_chain
     assert resumed["done"] is True
     assert "call" in resumed["final_summary"]
     assert "rejected" in resumed["final_summary"]
+
+
+@pytest.mark.asyncio
+async def test_connector_failure_is_logged_and_still_sets_stop_reason(monkeypatch, caplog):
+    """_guarded used to swallow a real apm_connectors failure into
+    stop_reason state with no log line at all -- a stalled case was
+    invisible unless someone manually ran show_case.py. See
+    case_graph.py's _guarded and its module-level `logger`.
+    """
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/tools/gmail/search":
+            return httpx.Response(500, text="upstream error")
+        raise AssertionError(f"unexpected call: {request.url.path}")
+
+    _install_fake_client(monkeypatch, handler)
+    graph = build_case_graph(MemorySaver())
+
+    with caplog.at_level(logging.ERROR, logger="apm_orchestrator.case_graph"):
+        result = await graph.ainvoke(
+            {"case_id": "c-fail", "account_name": "Acme", "steps_completed": []}, config=_config("c-fail")
+        )
+
+    assert result["done"] is True
+    assert "detect failed" in result["final_summary"]
+    assert any("c-fail" in r.message and "detect" in r.message for r in caplog.records)
