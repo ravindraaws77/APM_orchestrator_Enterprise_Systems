@@ -36,6 +36,7 @@ Usage (see scripts/run_case.py):
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, TypedDict
@@ -47,6 +48,8 @@ from apm_orchestrator.agents.order_renewal.policy import load_policy
 from apm_orchestrator.connectors_client import ConnectorError
 from apm_orchestrator.db import CaseRegistry
 from apm_orchestrator.tools import get_client
+
+logger = logging.getLogger("apm_orchestrator.case_graph")
 
 
 class CaseState(TypedDict, total=False):
@@ -172,6 +175,9 @@ def _guarded(step_name: str):
                 return await fn(state)
             except ConnectorError as exc:
                 steps = state.get("steps_completed", [])
+                logger.error(
+                    "case %s: %s failed: %s", state.get("case_id"), step_name, exc
+                )
                 return {
                     "stop_reason": f"{step_name} failed: {exc}",
                     "steps_completed": steps + [f"{step_name}:error"],
@@ -189,14 +195,16 @@ async def detect_node(state: CaseState) -> dict[str, Any]:
     steps = state.get("steps_completed", [])
 
     query = f'{policy.gmail_query} "{state["account_name"]}"'
-    matches = await client.gmail_search_emails(query=query, max_results=policy.detection_max_results)
+    matches = await client.gmail_search_emails(
+        query=query, max_results=policy.detection_max_results, process_id=state.get("case_id")
+    )
     if not matches:
         return {
             "stop_reason": f"No renewal signal found in Gmail for {state['account_name']!r}.",
             "steps_completed": steps + ["detect:no_signal"],
         }
 
-    message = await client.gmail_read_message(message_id=matches[0]["message_id"])
+    message = await client.gmail_read_message(message_id=matches[0]["message_id"], process_id=state.get("case_id"))
     return {"signal_message": message, "steps_completed": steps + ["detect"]}
 
 
@@ -209,7 +217,7 @@ async def verify_account_node(state: CaseState) -> dict[str, Any]:
     escaped_name = _escape_soql_literal(account_name)
 
     soql = policy.salesforce_lookup_soql_template.format(account_name=escaped_name)
-    records = await client.salesforce_query_records(soql=soql)
+    records = await client.salesforce_query_records(soql=soql, process_id=state.get("case_id"))
 
     if not records:
         # Exact match found nothing -- try a widened search, but tie-break
@@ -218,7 +226,7 @@ async def verify_account_node(state: CaseState) -> dict[str, Any]:
         # renewal, but a same-substring sibling account (a UK/Singapore
         # subsidiary) shouldn't get silently treated as the right one either.
         fallback_soql = policy.salesforce_fallback_lookup_soql_template.format(account_name=escaped_name)
-        candidates = await client.salesforce_query_records(soql=fallback_soql)
+        candidates = await client.salesforce_query_records(soql=fallback_soql, process_id=state.get("case_id"))
         target = _normalize_account_name(account_name)
         matched_account_ids = {
             candidate["fields"].get("AccountId")
@@ -278,7 +286,7 @@ async def check_blockers_node(state: CaseState) -> dict[str, Any]:
     steps = state.get("steps_completed", [])
 
     jql = policy.blocking_jql_template.format(account_name=state["account_name"])
-    issues = await client.jira_search_issues(jql=jql)
+    issues = await client.jira_search_issues(jql=jql, process_id=state.get("case_id"))
     for issue in issues:
         issue_type = issue.get("issue_type")
         labels = set(issue.get("fields", {}).get("labels", []) or [])
@@ -299,7 +307,7 @@ async def pull_contract_node(state: CaseState) -> dict[str, Any]:
     client = get_client()
     steps = state.get("steps_completed", [])
     try:
-        files = await client.drive_list_files(name_contains=state["account_name"])
+        files = await client.drive_list_files(name_contains=state["account_name"], process_id=state.get("case_id"))
     except ConnectorError:
         return {"steps_completed": steps + ["pull_contract:unavailable"]}
 
@@ -318,6 +326,7 @@ async def propose_call_node(state: CaseState) -> dict[str, Any]:
         title=f"Renewal call: {state['account_name']}",
         start=start.isoformat(),
         end=end.isoformat(),
+        process_id=state.get("case_id"),
     )
     return {
         # result["action_id"] (RunOutcomeResponse's top-level field, ==
@@ -347,7 +356,10 @@ async def propose_notice_node(state: CaseState) -> dict[str, Any]:
         f"Best,\nAPM Renewals Team"
     )
     result = await client.gmail_send_email(
-        to=to, subject=f"Renewal call scheduled - {state['account_name']}", body=body
+        to=to,
+        subject=f"Renewal call scheduled - {state['account_name']}",
+        body=body,
+        process_id=state.get("case_id"),
     )
     return {
         "action_id": result["action_id"],
@@ -368,6 +380,7 @@ async def propose_record_update_node(state: CaseState) -> dict[str, Any]:
         object_name="Opportunity",
         record_id=opportunity["record_id"],
         fields=policy.record_update_fields,
+        process_id=state.get("case_id"),
     )
     return {
         "action_id": result["action_id"],
