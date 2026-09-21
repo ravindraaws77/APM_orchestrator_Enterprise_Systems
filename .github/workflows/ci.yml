@@ -1,0 +1,33 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install package + dev/postgres extras
+        run: pip install -e ".[dev,postgres]" ruff
+
+      # Restricted to real bugs (syntax errors, undefined names, unused
+      # imports) rather than full style enforcement, since this repo has
+      # no ruff config yet.
+      - name: Lint (ruff, correctness-only ruleset)
+        run: ruff check --select=E9,F src tests scripts
+
+      # test_case_graph_mechanics.py self-skips: it needs both
+      # APM_TEST_DATABASE_URL and a reachable apm_connectors server
+      # (neither is set up here yet -- that's a real cross-repo
+      # integration job for later, not this pass).
+      - name: Test
+        run: pytest -q
