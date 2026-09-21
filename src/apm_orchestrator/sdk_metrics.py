@@ -13,6 +13,12 @@ stateless, one-shot `query()` per call with no `case_id` of their own
 `agent.py`'s module docstring for that distinction. Structured logging
 (logging_config.py, added alongside this) is what makes a log line an
 actual place for this to live, queryable like any other field on it.
+
+Also captures `model_usage` -- which model(s) actually served this run,
+and each one's own token/cost breakdown -- the first input agent-drift
+detection needs (a model upgrade behind the scenes can change behavior
+even with an unchanged prompt/policy); see the observability doc's
+"Item 8: Agent & policy drift", stage 1.
 """
 
 from __future__ import annotations
@@ -43,6 +49,12 @@ def log_result(agent: str, message: ResultMessage, **context: Any) -> None:
             "total_cost_usd": message.total_cost_usd,
             "usage": message.usage,
             "session_id": message.session_id,
+            # Which model(s) actually served this run, keyed by model id --
+            # `models` is a convenience for filtering/grouping without
+            # parsing the nested dict; `model_usage` keeps the full
+            # per-model token/cost breakdown the SDK reports.
+            "models": sorted(message.model_usage) if message.model_usage else [],
+            "model_usage": message.model_usage,
             **context,
         },
     )
