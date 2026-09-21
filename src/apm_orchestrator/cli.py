@@ -9,6 +9,8 @@ from __future__ import annotations
 import argparse
 import asyncio
 
+from apm_orchestrator.config import load_settings
+from apm_orchestrator.db import SupervisorRoutingLog
 from apm_orchestrator.supervisor import run_supervisor
 from apm_orchestrator.tools import aclose_client
 
@@ -25,8 +27,17 @@ def main() -> None:
     args = parser.parse_args()
 
     async def _run() -> None:
+        # Routing-confidence logging is opt-in: only when DATABASE_URL is
+        # configured, same "unconfigured -> skip cleanly" pattern the rest
+        # of this repo follows (e.g. get_client()'s connectors config).
+        settings = load_settings()
+        routing_log: SupervisorRoutingLog | None = None
+        if settings.database_url:
+            routing_log = SupervisorRoutingLog(settings.database_url)
+            await routing_log.setup()
+
         try:
-            print(await run_supervisor(args.prompt))
+            print(await run_supervisor(args.prompt, routing_log=routing_log))
         finally:
             await aclose_client()
 

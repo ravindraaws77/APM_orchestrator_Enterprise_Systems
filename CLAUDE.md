@@ -115,6 +115,20 @@ not just an upcoming one. See
 - Adding a new `@tool` to `tools.py` is additive; changing an existing
   one's `input_schema` to match a breaking change in `apm_connectors`'
   own `/tools/*` contract needs both repos updated together.
+- **A wrong-but-plausible Supervisor routing needs to be caught at
+  decision time, not reconstructed afterward.** The adversarial case (a
+  request matching no specialized agent) was already covered by a clean
+  decline; the harder case is a request that plausibly fits *two*
+  agents, routes to one of them, and comes back looking perfectly fine —
+  nobody files a bug for that. Every delegate tool in `supervisor.py`
+  requires `confidence` ("high"/"low") and a one-sentence `rationale`;
+  `run_supervisor`'s optional `routing_log` persists this to
+  `SupervisorRoutingLog` (`db.py`), and
+  `scripts/show_low_confidence_routings.py` surfaces every routing the
+  Supervisor itself flagged as a close call. A new delegate tool must
+  keep these two fields required, not optional — an ambiguous routing
+  with no confidence signal is exactly the silent-failure case this
+  exists to prevent.
 
 ## Layout
 
@@ -122,9 +136,11 @@ not just an upcoming one. See
 src/apm_orchestrator/
   config.py           env/config loading
   connectors_client.py  the only HTTP boundary to apm_connectors
-  db.py                 CaseRegistry -- which case ids exist, for the poller
+  db.py                 CaseRegistry (which case ids exist, for the poller)
+                         + SupervisorRoutingLog (routing confidence, for review)
   tools.py             one Claude Agent SDK @tool per apm_connectors route
-  supervisor.py         business-intent routing, delegates to agents
+  supervisor.py         business-intent routing, delegates to agents,
+                         requires confidence/rationale on every delegation
   poller.py             standalone process: resumes cases once their
                          apm_connectors action resolves (--once or --loop)
   agents/
@@ -134,6 +150,8 @@ src/apm_orchestrator/
 scripts/
   run_case.py          manually start one durable case
   show_case.py         print one case's current/final checkpoint state
+  show_low_confidence_routings.py  review routings the Supervisor flagged as a close call
+  test_supervisor_routing.py       live routing test, asserts confidence too
   e2e_smoke.py          real-server smoke test, no mocks
 tests/                 unit tests (mocked client, no infra) plus
                         test_case_graph_mechanics.py (real Postgres +
