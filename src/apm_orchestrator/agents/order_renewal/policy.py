@@ -9,6 +9,7 @@ docs/roadmap.md in apm_connectors).
 
 from __future__ import annotations
 
+import hashlib
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -21,6 +22,15 @@ _DEFAULT_POLICY_PATH = Path(__file__).parent / "policy.yaml"
 @dataclass(frozen=True)
 class OrderRenewalPolicy:
     raw: dict[str, Any] = field(repr=False)
+    # First 12 hex chars of the loaded policy.yaml's own sha256 -- a
+    # content hash rather than a human-maintained version number, since
+    # a human editing the YAML and forgetting to bump a version field is
+    # exactly the failure mode this exists to avoid (see CLAUDE.md's own
+    # history of policy.yaml mistakes shipping unnoticed). Recorded once
+    # per case (case_graph.py) so a decision can be tied back to the
+    # exact policy snapshot that governed it -- see the observability
+    # doc's "Item 8: Agent & policy drift", stage 2.
+    policy_version: str = "unknown"
 
     @property
     def gmail_query(self) -> str:
@@ -82,6 +92,7 @@ class OrderRenewalPolicy:
 
 def load_policy(path: str | Path | None = None) -> OrderRenewalPolicy:
     policy_path = Path(path) if path else _DEFAULT_POLICY_PATH
-    with policy_path.open("r", encoding="utf-8") as fh:
-        raw = yaml.safe_load(fh)
-    return OrderRenewalPolicy(raw=raw)
+    content = policy_path.read_bytes()
+    raw = yaml.safe_load(content)
+    policy_version = hashlib.sha256(content).hexdigest()[:12]
+    return OrderRenewalPolicy(raw=raw, policy_version=policy_version)
