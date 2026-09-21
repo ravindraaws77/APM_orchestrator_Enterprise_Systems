@@ -90,7 +90,7 @@ async def main(base_url: str, orchestrator_key: str, approver_key: str) -> int:
 
         decision = await approver.decide_action(action_id, approved=True)
         assert decision["final_result"]["executed"] is True
-        print(f"[ OK ] human-approver key approved action -> executed=True")
+        print("[ OK ] human-approver key approved action -> executed=True")
 
         after = await orchestrator.excel_read_range(sheet_name="Renewals", address="A2:B2")
         assert after["values"] == new_row

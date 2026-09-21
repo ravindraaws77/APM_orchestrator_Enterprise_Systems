@@ -146,6 +146,10 @@ src/apm_orchestrator/
   agents/
     order_renewal/      pilot agent: policy.yaml + policy.py + agent.py
                          (Claude Agent SDK) + case_graph.py (LangGraph)
+  evals/                golden-dataset evals against the real Claude API
+                         (routing_cases.py + run_supervisor_routing_eval.py) --
+                         distinct from tests/: judged by pass-rate over a
+                         versioned dataset, not assert-equal-on-one-input
   cli.py               manual single-prompt smoke test (Supervisor)
 scripts/
   run_case.py          manually start one durable case
@@ -153,7 +157,11 @@ scripts/
   show_low_confidence_routings.py  review routings the Supervisor flagged as a close call
   test_supervisor_routing.py       live routing test, asserts confidence too
   e2e_smoke.py          real-server smoke test, no mocks
+  test_supervisor_routing.py  thin CLI shim over evals/run_supervisor_routing_eval.py
 tests/                 unit tests (mocked client, no infra) plus
                         test_case_graph_mechanics.py (real Postgres +
-                        real server, skipped unless configured)
+                        real server, skipped unless configured) and
+                        test_supervisor_routing_eval.py (real Claude API,
+                        skipped unless ANTHROPIC_API_KEY is set -- see
+                        .github/workflows/eval.yml for the scheduled CI run)
 ```

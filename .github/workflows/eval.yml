@@ -1,0 +1,44 @@
+name: Supervisor routing eval
+
+# Runs the live golden-dataset eval (src/apm_orchestrator/evals/) against
+# the real Claude API. Separate from ci.yml on purpose: this makes ~20
+# real API calls per run, so it's scheduled/on-demand rather than
+# gating every push. Needs the ANTHROPIC_API_KEY repo secret set --
+# until it is, this job runs and cleanly no-ops rather than failing.
+on:
+  schedule:
+    - cron: "0 6 * * *" # nightly, 06:00 UTC
+  workflow_dispatch: {}
+
+jobs:
+  eval:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install package + dev/postgres extras
+        run: pip install -e ".[dev,postgres]"
+
+      - name: Run Supervisor routing eval
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          if [ -z "$ANTHROPIC_API_KEY" ]; then
+            echo "::warning::ANTHROPIC_API_KEY secret not set -- skipping live Supervisor routing eval. Add it under Settings > Secrets and variables > Actions to enable this job."
+            exit 0
+          fi
+          python -m apm_orchestrator.evals.run_supervisor_routing_eval --output eval-results.json
+
+      - name: Upload eval results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: supervisor-routing-eval-results
+          path: eval-results.json
+          if-no-files-found: ignore
+          retention-days: 90
