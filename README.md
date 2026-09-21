@@ -126,11 +126,15 @@ close call:
 python scripts/show_low_confidence_routings.py
 ```
 
-`python scripts/test_supervisor_routing.py` (needs `ANTHROPIC_API_KEY`)
-exercises this live against the real Claude API, including a
-deliberately ambiguous case (an existing customer's expansion deal that
-also mentions onboarding-shaped actions) that asserts `confidence ==
-"low"` rather than just printing the routing for a human to read.
+`python scripts/test_supervisor_routing.py` (needs `ANTHROPIC_API_KEY`) —
+a thin CLI shim over `apm_orchestrator.evals.run_supervisor_routing_eval`
+— exercises this live against the real Claude API across the full
+golden dataset (`evals/routing_cases.py`), reporting confidence
+calibration per case (`"ambiguous"`-category cases expected `"low"`,
+everything else expected `"high"`) alongside the existing delegate
+pass/fail. `pytest tests/test_supervisor_routing_eval.py` (same
+`ANTHROPIC_API_KEY` requirement) turns both into hard per-case
+assertions.
 
 ## Tests
 
