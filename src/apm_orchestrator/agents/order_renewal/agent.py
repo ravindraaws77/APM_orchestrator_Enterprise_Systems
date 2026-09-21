@@ -29,6 +29,7 @@ from claude_agent_sdk import (
 from apm_orchestrator.agents.order_renewal.policy import OrderRenewalPolicy, load_policy
 from apm_orchestrator.agent_result import raise_if_stopped
 from apm_orchestrator.config import load_settings
+from apm_orchestrator.sdk_metrics import log_result
 from apm_orchestrator.tools import apm_connectors_server
 
 Mode = Literal["workflow", "report"]
@@ -171,6 +172,7 @@ async def run_order_renewal(
                 if isinstance(block, TextBlock):
                     final_text += block.text
         elif isinstance(message, ResultMessage):
+            log_result("order_renewal", message, mode=mode)
             raise_if_stopped("Order-Renewal agent", message)
             final_text = message.result or final_text
     return final_text
