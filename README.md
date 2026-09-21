@@ -12,7 +12,14 @@ of.
 
 - **Supervisor** (`src/apm_orchestrator/supervisor.py`) — does
   business-intent routing only (e.g. "this is a renewal"), never calls a
-  connector tool itself. Delegates to specialized agents.
+  connector tool itself. Delegates to specialized agents, and requires a
+  `confidence` ("high"/"low") plus a one-sentence `rationale` on every
+  delegation — the answer to "a request that plausibly fits two agents,
+  routes to the wrong one, and looks fine" is catching the ambiguity at
+  decision time, not depending on someone noticing afterward. Optionally
+  persisted to `SupervisorRoutingLog` (`db.py`) when `DATABASE_URL` is
+  set; `scripts/show_low_confidence_routings.py` surfaces every
+  low-confidence routing for review.
 - **Order-Renewal agent** (`src/apm_orchestrator/agents/order_renewal/`)
   — the pilot business-process agent: detect → verify → act → record,
   using a scoped toolbelt across Gmail/Calendar/Drive/Salesforce/Jira.
@@ -107,6 +114,27 @@ python scripts/run_case.py acme-2026-09-15 "Acme Corp"   # starts (or resumes-fr
 
 apm-orchestrator-poller --once     # or --loop --interval 60 for a long-lived process
 ```
+
+### Reviewing ambiguous Supervisor routings (Postgres required)
+
+With `DATABASE_URL` set, every Supervisor run (`apm-orchestrator`, the
+CLI in `cli.py`) logs its routing decision — delegate, confidence,
+rationale — to `SupervisorRoutingLog`. Review the ones it flagged as a
+close call:
+
+```bash
+python scripts/show_low_confidence_routings.py
+```
+
+`python scripts/test_supervisor_routing.py` (needs `ANTHROPIC_API_KEY`) —
+a thin CLI shim over `apm_orchestrator.evals.run_supervisor_routing_eval`
+— exercises this live against the real Claude API across the full
+golden dataset (`evals/routing_cases.py`), reporting confidence
+calibration per case (`"ambiguous"`-category cases expected `"low"`,
+everything else expected `"high"`) alongside the existing delegate
+pass/fail. `pytest tests/test_supervisor_routing_eval.py` (same
+`ANTHROPIC_API_KEY` requirement) turns both into hard per-case
+assertions.
 
 ## Tests
 
