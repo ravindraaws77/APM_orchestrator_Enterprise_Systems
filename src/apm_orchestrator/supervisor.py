@@ -25,6 +25,7 @@ from claude_agent_sdk import (
 
 from apm_orchestrator.agents.customer_onboarding.agent import run_customer_onboarding
 from apm_orchestrator.agents.order_renewal.agent import run_order_renewal
+from apm_orchestrator.sdk_metrics import log_result
 
 
 @tool(
@@ -133,6 +134,8 @@ async def run_supervisor(prompt: str) -> str:
             for block in message.content:
                 if isinstance(block, TextBlock):
                     final_text += block.text
-        elif isinstance(message, ResultMessage) and message.subtype == "success":
-            final_text = message.result or final_text
+        elif isinstance(message, ResultMessage):
+            log_result("supervisor", message)
+            if message.subtype == "success":
+                final_text = message.result or final_text
     return final_text
