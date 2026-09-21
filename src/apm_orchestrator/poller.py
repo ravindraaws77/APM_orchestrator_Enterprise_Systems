@@ -33,6 +33,7 @@ import apm_orchestrator.agents.customer_onboarding.case_graph as customer_onboar
 import apm_orchestrator.agents.order_renewal.case_graph as order_renewal_case_graph
 from apm_orchestrator.config import load_settings
 from apm_orchestrator.db import CaseRegistry
+from apm_orchestrator.logging_config import configure_logging
 from apm_orchestrator.tools import aclose_client, get_client
 
 logger = logging.getLogger("apm_orchestrator.poller")
@@ -64,7 +65,9 @@ async def _sweep_agent(agent: str, module, registry: CaseRegistry, checkpointer,
 
         status = await client.get_action_status(action_id)
         if status is None:
-            logger.debug("case %s still awaiting a human decision", case_id)
+            logger.debug(
+                "case still awaiting a human decision", extra={"case_id": case_id, "agent": agent}
+            )
             continue
 
         outcome = await module.resume_case(
@@ -74,12 +77,14 @@ async def _sweep_agent(agent: str, module, registry: CaseRegistry, checkpointer,
             final_result=status["result"],
         )
         logger.info(
-            "resumed case %s (%s, %s) -- done=%s%s",
-            case_id,
-            agent,
-            pending_action.get("tool"),
-            outcome.done,
-            "" if outcome.done else f", now awaiting {outcome.step!r}",
+            "resumed case",
+            extra={
+                "case_id": case_id,
+                "agent": agent,
+                "tool": pending_action.get("tool"),
+                "done": outcome.done,
+                "awaiting_step": outcome.step,
+            },
         )
         resumed += 1
 
@@ -115,7 +120,7 @@ async def _run_loop(database_url: str, interval: float) -> None:
         while True:
             try:
                 count = await sweep_once(database_url)
-                logger.info("sweep complete, resumed %d case(s)", count)
+                logger.info("sweep complete", extra={"resumed": count})
             except Exception:
                 logger.exception("sweep failed, will retry next interval")
             await asyncio.sleep(interval)
@@ -131,7 +136,7 @@ def main() -> None:
     parser.add_argument("--interval", type=float, default=60.0, help="Seconds between sweeps in --loop mode")
     args = parser.parse_args()
 
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    configure_logging()
     settings = load_settings()
     if not settings.database_url:
         raise SystemExit("DATABASE_URL is required to run the poller")
@@ -140,7 +145,7 @@ def main() -> None:
         asyncio.run(_run_loop(settings.database_url, args.interval))
     else:
         count = asyncio.run(_run_once(settings.database_url))
-        print(f"Resumed {count} case(s).")
+        logger.info("sweep complete", extra={"resumed": count})
 
 
 if __name__ == "__main__":
