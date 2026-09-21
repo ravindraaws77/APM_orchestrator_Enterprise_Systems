@@ -6,6 +6,7 @@ data, so a policy change is a config edit, not a code change.
 
 from __future__ import annotations
 
+import hashlib
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -18,6 +19,9 @@ _DEFAULT_POLICY_PATH = Path(__file__).parent / "policy.yaml"
 @dataclass(frozen=True)
 class CustomerOnboardingPolicy:
     raw: dict[str, Any] = field(repr=False)
+    # See order_renewal/policy.py's OrderRenewalPolicy.policy_version --
+    # same content-hash rationale and shape.
+    policy_version: str = "unknown"
 
     @property
     def salesforce_detect_soql_template(self) -> str:
@@ -86,6 +90,7 @@ class CustomerOnboardingPolicy:
 
 def load_policy(path: str | Path | None = None) -> CustomerOnboardingPolicy:
     policy_path = Path(path) if path else _DEFAULT_POLICY_PATH
-    with policy_path.open("r", encoding="utf-8") as fh:
-        raw = yaml.safe_load(fh)
-    return CustomerOnboardingPolicy(raw=raw)
+    content = policy_path.read_bytes()
+    raw = yaml.safe_load(content)
+    policy_version = hashlib.sha256(content).hexdigest()[:12]
+    return CustomerOnboardingPolicy(raw=raw, policy_version=policy_version)
