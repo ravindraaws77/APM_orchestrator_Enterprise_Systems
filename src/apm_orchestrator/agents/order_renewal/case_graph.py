@@ -176,7 +176,8 @@ def _guarded(step_name: str):
             except ConnectorError as exc:
                 steps = state.get("steps_completed", [])
                 logger.error(
-                    "case %s: %s failed: %s", state.get("case_id"), step_name, exc
+                    "case_graph step failed",
+                    extra={"case_id": state.get("case_id"), "step": step_name, "error": str(exc)},
                 )
                 return {
                     "stop_reason": f"{step_name} failed: {exc}",

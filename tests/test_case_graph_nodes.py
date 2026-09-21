@@ -216,4 +216,7 @@ async def test_connector_failure_is_logged_and_still_sets_stop_reason(monkeypatc
 
     assert result["done"] is True
     assert "detect failed" in result["final_summary"]
-    assert any("c-fail" in r.message and "detect" in r.message for r in caplog.records)
+    assert any(
+        getattr(r, "case_id", None) == "c-fail" and getattr(r, "step", None) == "detect"
+        for r in caplog.records
+    )
