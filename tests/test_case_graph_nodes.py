@@ -7,7 +7,6 @@ interrupt/Postgres/poller mechanism against live infra.
 
 from __future__ import annotations
 
-import json
 import logging
 
 import httpx
