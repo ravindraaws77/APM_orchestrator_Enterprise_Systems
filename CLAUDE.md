@@ -190,6 +190,7 @@ scripts/
   run_case.py          manually start one durable case
   show_case.py         print one case's current/final checkpoint state
   show_low_confidence_routings.py  review routings the Supervisor flagged as a close call
+  run_calibration_batch.py seed SupervisorRoutingLog with varied prompts (not from evals/) for review
   review_routing_log.py    sample both confidence buckets, record a human's correct/incorrect verdict
   calibration_report.py    the actual calibration check: wrong-rate per confidence bucket, from reviewed rows
   test_supervisor_routing.py  thin CLI shim over evals/run_supervisor_routing_eval.py
