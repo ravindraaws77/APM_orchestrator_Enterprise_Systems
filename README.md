@@ -145,7 +145,28 @@ assertions.
 whether the model agrees with the dataset author's own labels — not
 whether "low" confidence actually predicts a wrong routing on real
 traffic. That's a different question, answered from reviewed ground
-truth instead:
+truth instead — and ground truth needs real routing decisions to review
+in the first place, not just golden-dataset cases (reviewing those would
+just re-confirm the eval with extra steps). `scripts/run_calibration_batch.py`
+seeds a batch of varied prompts (deliberately distinct company names
+from `evals/routing_cases.py`) through the Supervisor in one process:
+
+```bash
+python scripts/run_calibration_batch.py
+```
+
+Only a prompt the Supervisor actually delegates gets logged (a declined,
+out-of-scope request has nothing to record, same as the CLI) — and a
+delegated prompt runs the *full* downstream agent (`mode="workflow"`),
+not just the routing decision, so expect real Salesforce/Jira/Gmail
+reads and real Claude API calls per prompt, same cost as running
+`apm-orchestrator` by hand once per prompt. No writes happen without a
+human approving them, same approval gate as always. One run is a start,
+not the whole calibration dataset — re-run it (with fresh prompts added
+to `PROMPTS` each time, so review keeps seeing new decisions) as part of
+ongoing usage, since `calibration_report.py` needs 10+ *reviewed* rows
+per bucket, and review is a separate, manual step after routing
+decisions exist:
 
 ```bash
 # Sample unreviewed routings from both confidence buckets and record a
