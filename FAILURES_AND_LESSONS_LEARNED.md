@@ -623,6 +623,62 @@ machine, a real account, and real (if fictional) prompts.
 
 ---
 
+## 11. First real calibration verdict -- and what it took to get there
+
+Not a bug -- the first time `calibration_report.py` (built in PR #11)
+produced an actual verdict instead of "not enough reviewed data," and a
+record of the two real gaps found on the way there, both live-hit before
+this milestone was reachable at all.
+
+**11.1 -- Duplicate batch, from a stale local checkout.** A second run
+of `run_calibration_batch.py`, expected to use the refreshed
+low-skewed prompt set from PR #16, instead re-ran the original 8
+batch-1 prompts verbatim (same company names, same order, same 5
+high/3 low outcome). Root cause: the local checkout hadn't picked up
+PR #16's merge before this run -- `git pull origin main` between
+"a PR merged" and "run the thing that PR changed" isn't automatic, and
+nothing in this repo's scripts detects or warns about a stale checkout.
+Not harmful here (each run still logs fresh `SupervisorRoutingLog` rows
+regardless of whether the prompt text repeats), but a real near-miss:
+running the same prompts twice measures the model's consistency on
+one fixed input, not new calibration signal, and burns real API spend
+doing it. No code fix -- the takeaway is procedural: confirm
+`git log -1`/the prompt list actually changed before trusting a batch
+run's diversity, especially right after a merge.
+
+**11.2 -- The verdict itself.** Across three runs (batch 1 twice --
+the duplicate above included -- plus batch 2's refreshed low-skewed
+set), 26 routing decisions were logged and hand-reviewed via
+`review_routing_log.py mark <id> --correct|--incorrect`:
+
+```
+=== Confidence calibration ===
+
+high-confidence: 0/16 wrong (0%)
+ low-confidence: 1/10 wrong (10%)
+
+Calibrated: low-confidence routings are wrong more often (10%) than
+high-confidence ones (0%). The confidence signal is worth trusting.
+```
+
+The first real evidence that the confidence field built in PR #9 and
+the calibration machinery built in PR #11 actually measure something:
+every high-confidence routing reviewed was correct, and the one wrong
+routing in the whole sample was a low-confidence one -- exactly the
+shape calibration is supposed to detect.
+
+**Takeaway, stated plainly:** 10 reviewed low-confidence rows is
+`calibration_report.py`'s own minimum threshold for giving a verdict,
+not a sample large enough to call this settled -- one wrong call is
+currently 100% of the low-confidence error rate, so a single additional
+miss or a single correction flips the number materially. "Calibrated"
+here means "directionally right on a first real sample," not "proven."
+Keep sampling and reviewing, per this repo's own `README.md` guidance,
+before leaning on this signal for anything higher-stakes than a review
+queue.
+
+---
+
 ## Reference
 
 - Runbook (execution guide, same test session): *Acme Renewal Runbook*
