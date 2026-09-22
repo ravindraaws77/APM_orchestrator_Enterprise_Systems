@@ -19,7 +19,12 @@ of.
   decision time, not depending on someone noticing afterward. Optionally
   persisted to `SupervisorRoutingLog` (`db.py`) when `DATABASE_URL` is
   set; `scripts/show_low_confidence_routings.py` surfaces every
-  low-confidence routing for review.
+  low-confidence routing for review. Confidence only earns its keep if
+  it's actually calibrated — `scripts/review_routing_log.py` samples
+  both confidence buckets for a human verdict, and
+  `scripts/calibration_report.py` reports whether "low" routings are
+  actually wrong more often than "high" ones, from that reviewed
+  ground truth.
 - **Order-Renewal agent** (`src/apm_orchestrator/agents/order_renewal/`)
   — the pilot business-process agent: detect → verify → act → record,
   using a scoped toolbelt across Gmail/Calendar/Drive/Salesforce/Jira.
@@ -129,12 +134,37 @@ python scripts/show_low_confidence_routings.py
 `python scripts/test_supervisor_routing.py` (needs `ANTHROPIC_API_KEY`) —
 a thin CLI shim over `apm_orchestrator.evals.run_supervisor_routing_eval`
 — exercises this live against the real Claude API across the full
-golden dataset (`evals/routing_cases.py`), reporting confidence
-calibration per case (`"ambiguous"`-category cases expected `"low"`,
-everything else expected `"high"`) alongside the existing delegate
-pass/fail. `pytest tests/test_supervisor_routing_eval.py` (same
-`ANTHROPIC_API_KEY` requirement) turns both into hard per-case
+golden dataset (`evals/routing_cases.py`), checking each case's
+confidence against what its category predicts (`"ambiguous"` cases
+expected `"low"`, everything else expected `"high"`) alongside the
+existing delegate pass/fail. `pytest tests/test_supervisor_routing_eval.py`
+(same `ANTHROPIC_API_KEY` requirement) turns both into hard per-case
 assertions.
+
+**That eval check is not the same as calibration.** It only tells you
+whether the model agrees with the dataset author's own labels — not
+whether "low" confidence actually predicts a wrong routing on real
+traffic. That's a different question, answered from reviewed ground
+truth instead:
+
+```bash
+# Sample unreviewed routings from both confidence buckets and record a
+# human verdict on each -- calibration needs to know the wrong-rate on
+# BOTH sides, not just the ones already flagged as low-confidence.
+python scripts/review_routing_log.py list --confidence low
+python scripts/review_routing_log.py list --confidence high
+python scripts/review_routing_log.py mark 42 --correct
+python scripts/review_routing_log.py mark 43 --incorrect
+
+# Once enough rows are reviewed (10+ per bucket), see whether "low"
+# actually predicts wrong more often than "high" does:
+python scripts/calibration_report.py
+```
+
+If the report comes back saying confidence isn't calibrated, that's a
+real finding, not a bug to hide — it means `SYSTEM_PROMPT`'s calibration
+guidance needs revisiting before the flagged-for-review queue can be
+trusted.
 
 ## Tests
 

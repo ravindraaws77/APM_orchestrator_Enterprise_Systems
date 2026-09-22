@@ -34,8 +34,20 @@ CREATE TABLE IF NOT EXISTS supervisor_routing_log (
     confidence TEXT NOT NULL,
     rationale TEXT NOT NULL,
     request_excerpt TEXT NOT NULL,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    reviewed_correct BOOLEAN,
+    reviewed_at TIMESTAMPTZ
 )
+"""
+
+# ADD COLUMN IF NOT EXISTS, not just the CREATE TABLE above: a database
+# that already has this table from before reviewed_correct/reviewed_at
+# existed needs these added in place -- setup() must stay safe to call
+# against either a brand-new or an already-running deployment.
+_ADD_REVIEW_COLUMNS_SQL = """
+ALTER TABLE supervisor_routing_log
+    ADD COLUMN IF NOT EXISTS reviewed_correct BOOLEAN,
+    ADD COLUMN IF NOT EXISTS reviewed_at TIMESTAMPTZ
 """
 
 
@@ -74,7 +86,21 @@ class SupervisorRoutingLog:
     included -- the thing a plausible-but-wrong routing needs to be
     caught after the fact instead of depending on someone noticing (see
     CLAUDE.md). Same short-lived-connection-per-call shape as
-    CaseRegistry, for the same reason."""
+    CaseRegistry, for the same reason.
+
+    Confidence is only useful if it's calibrated -- if a "low" call is
+    no more likely to actually be wrong than a "high" one, flagging on
+    it just builds a review queue nobody ends up trusting. There's no
+    way to check that without ground truth, so `reviewed_correct` exists
+    to capture a human's judgment (mark_reviewed) on *both* low- and
+    high-confidence rows (list_for_review), and calibration_report()
+    computes whether the wrong ones actually cluster in "low" once
+    enough rows have been reviewed. Capturing this from day one matters
+    because a routing decision made before reviewed_correct existed can
+    never have its ground truth reconstructed later -- there's no
+    "correct" to recover from a plain request/delegate/confidence row
+    after the fact.
+    """
 
     def __init__(self, database_url: str) -> None:
         self._database_url = database_url
@@ -82,14 +108,18 @@ class SupervisorRoutingLog:
     async def setup(self) -> None:
         async with await psycopg.AsyncConnection.connect(self._database_url) as conn:
             await conn.execute(_CREATE_ROUTING_LOG_TABLE_SQL)
+            await conn.execute(_ADD_REVIEW_COLUMNS_SQL)
 
-    async def record(self, *, delegate: str, confidence: str, rationale: str, request_excerpt: str) -> None:
+    async def record(self, *, delegate: str, confidence: str, rationale: str, request_excerpt: str) -> int:
         async with await psycopg.AsyncConnection.connect(self._database_url) as conn:
-            await conn.execute(
+            cursor = await conn.execute(
                 "INSERT INTO supervisor_routing_log "
-                "(delegate, confidence, rationale, request_excerpt) VALUES (%s, %s, %s, %s)",
+                "(delegate, confidence, rationale, request_excerpt) VALUES (%s, %s, %s, %s) "
+                "RETURNING id",
                 (delegate, confidence, rationale, request_excerpt),
             )
+            row = await cursor.fetchone()
+        return row[0]
 
     async def list_low_confidence(self, limit: int = 50) -> list[dict]:
         """The actual answer to "does it depend on someone noticing":
@@ -98,7 +128,7 @@ class SupervisorRoutingLog:
         newest first, regardless of whether it later turned out right."""
         async with await psycopg.AsyncConnection.connect(self._database_url) as conn:
             cursor = await conn.execute(
-                "SELECT delegate, confidence, rationale, request_excerpt, created_at "
+                "SELECT id, delegate, confidence, rationale, request_excerpt, created_at, reviewed_correct "
                 "FROM supervisor_routing_log WHERE confidence = 'low' "
                 "ORDER BY created_at DESC LIMIT %s",
                 (limit,),
@@ -106,11 +136,88 @@ class SupervisorRoutingLog:
             rows = await cursor.fetchall()
         return [
             {
-                "delegate": row[0],
-                "confidence": row[1],
-                "rationale": row[2],
-                "request_excerpt": row[3],
-                "created_at": row[4],
+                "id": row[0],
+                "delegate": row[1],
+                "confidence": row[2],
+                "rationale": row[3],
+                "request_excerpt": row[4],
+                "created_at": row[5],
+                "reviewed_correct": row[6],
             }
             for row in rows
         ]
+
+    async def list_for_review(self, *, confidence: str | None = None, limit: int = 20) -> list[dict]:
+        """Unreviewed rows to sample for calibration -- deliberately not
+        low-confidence-only (unlike list_low_confidence): calibration
+        needs ground truth on *both* buckets to compute a wrong-rate
+        per bucket, not just the ones already flagged. Pass
+        confidence="high" or "low" to sample one bucket at a time (e.g.
+        alternating, so review effort doesn't skew toward whichever
+        bucket happens to be reviewed first). Oldest-first, not newest:
+        newest-first would let a steady stream of new routings mean the
+        oldest unreviewed rows never get reached, the same starvation
+        the FIFO ordering here is meant to avoid."""
+        query = (
+            "SELECT id, delegate, confidence, rationale, request_excerpt, created_at "
+            "FROM supervisor_routing_log WHERE reviewed_correct IS NULL "
+        )
+        params: list[object] = []
+        if confidence is not None:
+            query += "AND confidence = %s "
+            params.append(confidence)
+        query += "ORDER BY created_at ASC LIMIT %s"
+        params.append(limit)
+
+        async with await psycopg.AsyncConnection.connect(self._database_url) as conn:
+            cursor = await conn.execute(query, params)
+            rows = await cursor.fetchall()
+        return [
+            {
+                "id": row[0],
+                "delegate": row[1],
+                "confidence": row[2],
+                "rationale": row[3],
+                "request_excerpt": row[4],
+                "created_at": row[5],
+            }
+            for row in rows
+        ]
+
+    async def mark_reviewed(self, row_id: int, *, correct: bool) -> None:
+        async with await psycopg.AsyncConnection.connect(self._database_url) as conn:
+            result = await conn.execute(
+                "UPDATE supervisor_routing_log SET reviewed_correct = %s, reviewed_at = now() WHERE id = %s",
+                (correct, row_id),
+            )
+        if result.rowcount == 0:
+            raise ValueError(f"no supervisor_routing_log row with id={row_id}")
+
+    async def calibration_report(self) -> dict:
+        """The actual calibration check: among reviewed rows, what
+        fraction of each confidence bucket turned out wrong. If "low"
+        isn't meaningfully worse than "high", confidence isn't carrying
+        real signal -- see the class docstring."""
+        async with await psycopg.AsyncConnection.connect(self._database_url) as conn:
+            cursor = await conn.execute(
+                "SELECT confidence, reviewed_correct FROM supervisor_routing_log WHERE reviewed_correct IS NOT NULL"
+            )
+            rows = await cursor.fetchall()
+
+        buckets: dict[str, dict[str, int]] = {
+            "high": {"reviewed": 0, "wrong": 0},
+            "low": {"reviewed": 0, "wrong": 0},
+        }
+        for confidence, correct in rows:
+            bucket = buckets.setdefault(confidence, {"reviewed": 0, "wrong": 0})
+            bucket["reviewed"] += 1
+            if not correct:
+                bucket["wrong"] += 1
+
+        return {
+            bucket_name: {
+                **counts,
+                "wrong_rate": (counts["wrong"] / counts["reviewed"]) if counts["reviewed"] else None,
+            }
+            for bucket_name, counts in buckets.items()
+        }

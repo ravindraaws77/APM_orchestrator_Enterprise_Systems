@@ -129,6 +129,19 @@ not just an upcoming one. See
   keep these two fields required, not optional — an ambiguous routing
   with no confidence signal is exactly the silent-failure case this
   exists to prevent.
+- **Confidence is only useful if it's calibrated, and that can't be
+  checked without ground truth captured from day one.** Flagging
+  low-confidence routings for review means nothing if "low" isn't
+  actually more likely to be wrong than "high" -- and there's no way to
+  know that from the eval dataset alone, since that only checks
+  agreement with the dataset author's own labels, not real outcomes.
+  `SupervisorRoutingLog.mark_reviewed` records a human's verdict on a
+  routing (`scripts/review_routing_log.py`, sampling *both* confidence
+  buckets, not just the flagged ones), and `calibration_report()`
+  (`scripts/calibration_report.py`) computes the actual wrong-rate per
+  bucket once enough rows are reviewed. A routing decision made before
+  `reviewed_correct` existed has no way to recover its ground truth
+  later -- capture it as it happens, don't plan to backfill it.
 
 ## Layout
 
@@ -155,9 +168,10 @@ scripts/
   run_case.py          manually start one durable case
   show_case.py         print one case's current/final checkpoint state
   show_low_confidence_routings.py  review routings the Supervisor flagged as a close call
-  test_supervisor_routing.py       live routing test, asserts confidence too
-  e2e_smoke.py          real-server smoke test, no mocks
+  review_routing_log.py    sample both confidence buckets, record a human's correct/incorrect verdict
+  calibration_report.py    the actual calibration check: wrong-rate per confidence bucket, from reviewed rows
   test_supervisor_routing.py  thin CLI shim over evals/run_supervisor_routing_eval.py
+  e2e_smoke.py          real-server smoke test, no mocks
 tests/                 unit tests (mocked client, no infra) plus
                         test_case_graph_mechanics.py (real Postgres +
                         real server, skipped unless configured) and
