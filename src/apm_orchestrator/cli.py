@@ -8,17 +8,19 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import sys
 
-# psycopg's async mode needs a selector-based event loop; Windows'
-# asyncio default (ProactorEventLoop) isn't compatible with it and fails
-# at connection time with "Psycopg cannot use the 'ProactorEventLoop'"
-# -- live-verified (this entry point didn't touch Postgres before
-# SupervisorRoutingLog's routing_log wiring landed, so it never hit
-# this until then), same fix as run_case.py/show_case.py/poller.py. No
-# effect on other platforms.
-if sys.platform == "win32":
-    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+# Deliberately NOT the WindowsSelectorEventLoopPolicy guard that
+# run_case.py/show_case.py/poller.py use: this entry point also runs
+# run_supervisor(), which spawns a subprocess via the Claude Agent SDK
+# (query() in supervisor.py) -- and on Windows, only the default
+# ProactorEventLoop can create subprocesses; SelectorEventLoop can't.
+# Live-verified: setting that policy here fixed SupervisorRoutingLog's
+# psycopg crash but then broke the SDK subprocess with a *different*
+# crash (NotImplementedError from asyncio's subprocess_exec). The two
+# requirements can't both be satisfied by one process-wide loop policy,
+# so SupervisorRoutingLog's own psycopg calls (db.py's `_run_pg`) run on
+# a private worker-thread selector loop instead, and this entry point's
+# main loop stays on Windows' default so the SDK subprocess still works.
 
 from apm_orchestrator.config import load_settings
 from apm_orchestrator.db import SupervisorRoutingLog
