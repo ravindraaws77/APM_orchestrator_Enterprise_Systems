@@ -537,6 +537,92 @@ instead of a code path.
 
 ---
 
+## 10. First live calibration batch run: two real bugs, then a clean 8/8
+
+The first real exercise of the full Windows + calibration-tracking
+stack together, on the same Windows machine section 2's fixes targeted
+(`apm-orchestrator "Acme Corp's license is up for renewal..."`),
+immediately after PRs #12/#13 merged. Three things happened, in order.
+
+### 10.1 — The two Windows event-loop bugs, live-confirmed back-to-back
+
+The user's first retry hit the exact `ProactorEventLoop`/psycopg crash
+section 2 documents, fixed in #12. Pulling that fix and retrying
+immediately hit a *second*, different crash from the fix itself: the
+Claude Agent SDK's subprocess spawn (`query()` in `supervisor.py`, which
+launches the `claude` CLI) needs `ProactorEventLoop`, but PR #12's fix
+forces the whole process onto `SelectorEventLoop` to satisfy psycopg --
+the two requirements are mutually exclusive under one Windows event loop
+policy. Fixed in #13 by moving `SupervisorRoutingLog`'s psycopg calls
+onto a private worker-thread selector loop (`db.py`'s `_run_pg`) instead
+of picking a process-wide policy. See section 2's own entry for the full
+detail -- noted here because this is where it was actually *proven*:
+both bugs were caught back-to-back on the same real command, and the
+fix for #13 was live-verified moments later by the calibration batch
+run below completing cleanly.
+
+### 10.2 — `run_calibration_batch.py` crashed on a real, boring cause: no API credits left
+
+**Symptom:** `run_calibration_batch.py` crashed with
+`claude_agent_sdk._errors.ResultError: Claude Code returned an error
+result: Credit balance is too low`, as a bare traceback with no
+indication of which of the 8 prompts had already been logged.
+
+**Root cause:** not a bug -- the account backing `ANTHROPIC_API_KEY` had
+run out of credits. Each delegated prompt runs the *full* downstream
+agent (`mode="workflow"`), not just the routing decision, so a batch of
+8 prompts is several real Claude API calls each, not 8 -- exactly the
+cost this script's own docstring warns about, just hit for real the
+first time it ran against a live account.
+
+**Fix (PR #15):** topping up credits is the actual fix (nothing here is
+code-fixable); what *is* fixable is that hitting this mid-batch
+shouldn't cost the whole batch's progress. Added `--start N` (1-indexed)
+plus a `try`/`except` around each prompt's `run_supervisor()` call that
+prints exactly how many prompts logged successfully and the exact
+`--start` value to resume from, instead of propagating a bare traceback.
+
+**Takeaway:** the same discipline as every other entry here, applied to
+an operational failure instead of a code bug -- the first time a script
+actually runs against a live, finite resource (API credits, a rate
+limit, a quota) is when its failure-partway-through behavior gets
+tested for real, and "restart from scratch" is a bad default for
+anything that costs real money per step.
+
+### 10.3 — The full pipeline, working: 8/8 logged, 5 high / 3 low
+
+Once credits were topped up, the first batch of 8 varied prompts
+(`Wayne Enterprises`, `Sterling Cooper`, `Oscorp`, `Prestige Worldwide`,
+`Tyrell Corp`, `Vandelay Industries`, `Dunder Mifflin`, and one
+unnamed-account prompt -- `run_calibration_batch.py`'s `PROMPTS` has
+since been refreshed to a second batch in PR #16, so this list won't
+match the file as it stands today) ran clean end to end: every prompt
+correctly delegated and logged to
+`SupervisorRoutingLog`, 5 `high` / 3 `low`, each downstream agent run
+correctly halting (no Salesforce record for a fictional company) rather
+than erroring.
+
+**One live finding worth flagging, not a bug:** the Vandelay Industries
+prompt was written as an *adversarial* case -- correct routing
+(Customer-Onboarding) is unambiguous once you read `SYSTEM_PROMPT`'s own
+rule ("brand-new customer" decides it), the same shape as the other
+adversarial cases in `evals/routing_cases.py`, which are all expected
+`"high"`. It still routed correctly, but came back `"low"`. This is
+exactly the kind of signal `calibration_report.py` exists to surface --
+logged for human review (`review_routing_log.py`) rather than treated as
+a routing bug, since the routing itself was correct.
+
+**Takeaway:** this is the first time the Windows fixes, the calibration
+logging path, and a real downstream agent run were all exercised
+together in one live session -- and it took hitting two more real,
+unrelated failures (a second Windows crash, an exhausted API account)
+before reaching a clean run. Consistent with every other entry in this
+document: nothing here was caught by review or by reasoning about the
+code in the abstract, only by actually running it against a real
+machine, a real account, and real (if fictional) prompts.
+
+---
+
 ## Reference
 
 - Runbook (execution guide, same test session): *Acme Renewal Runbook*
