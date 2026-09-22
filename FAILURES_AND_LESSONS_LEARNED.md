@@ -146,6 +146,38 @@ resolved this immediately — faster than a third guess would have been.
   one-time repo-wide fix, it's a per-file obligation every new
   Postgres-touching entry point has to remember on its own.
 
+- **Follow-up, same user, same command, immediately after the fix
+  above shipped: a *second* Windows crash, from the fix itself.**
+  With the `WindowsSelectorEventLoopPolicy` guard now in `cli.py`,
+  `routing_log.setup()` succeeded -- but `run_supervisor()`'s call into
+  the Claude Agent SDK (`query()`, which spawns the `claude` CLI as a
+  subprocess) then failed with `NotImplementedError` from asyncio's
+  `subprocess_exec`. **Root cause:** on Windows, subprocess creation
+  only works under `ProactorEventLoop` -- `SelectorEventLoop` (what
+  psycopg's async mode requires) can't create subprocesses at all. The
+  original fix forced the *whole process* onto `SelectorEventLoop`,
+  which happened to fix psycopg but silently broke the SDK subprocess
+  in exchange -- two requirements that are mutually exclusive under one
+  Windows event loop policy, discovered only because `cli.py` is the
+  one entry point that needs both in the same run. **Fix:** rather than
+  picking one loop policy for the whole process, `SupervisorRoutingLog`
+  (`db.py`) now runs each of its psycopg calls to completion in a
+  throwaway worker thread with its own private `SelectorEventLoop`
+  (`_run_pg`/`_run_coro_on_selector_loop`) -- each call already opens a
+  fresh, short-lived connection with no state living across calls, so
+  this is safe. `cli.py`'s main loop goes back to Windows' default
+  (`ProactorEventLoop`), so the SDK subprocess works again, while
+  `SupervisorRoutingLog` transparently stays psycopg-safe regardless of
+  the caller's loop. The `WindowsSelectorEventLoopPolicy` guards in
+  `review_routing_log.py`/`calibration_report.py` became redundant once
+  `db.py` handled this internally, and were removed. **Takeaway:** a fix
+  validated only against the *original* symptom can still be wrong --
+  this one was proven against a real Postgres connection and a full
+  test suite, but nothing in that validation exercised the SDK
+  subprocess path `cli.py` also depends on. The real regression test for
+  a Windows event-loop fix in this repo is "does the *whole* entry
+  point still work," not just the one call that crashed first.
+
 ---
 
 ## 3. Salesforce / test-data setup failures

@@ -17,7 +17,45 @@ one table would tie the correctness of one to a change in the other.
 
 from __future__ import annotations
 
+import asyncio
+import sys
+
 import psycopg
+
+
+def _run_coro_on_selector_loop(coro):
+    """Drive one coroutine to completion on a private SelectorEventLoop,
+    called from a worker thread (see `_run_pg`)."""
+    loop = asyncio.SelectorEventLoop()
+    asyncio.set_event_loop(loop)
+    try:
+        return loop.run_until_complete(coro)
+    finally:
+        loop.close()
+
+
+async def _run_pg(coro):
+    """Run one psycopg async call safely regardless of the caller's own
+    event loop.
+
+    psycopg's async mode needs a selector-based event loop, but
+    `cli.py` -- the one caller that uses `SupervisorRoutingLog` -- also
+    spawns a subprocess via the Claude Agent SDK (`query()` in
+    `supervisor.py`), which on Windows only works under the default
+    ProactorEventLoop; SelectorEventLoop can't create subprocesses
+    there. The two requirements are mutually exclusive within a single
+    Windows event loop (live-verified: setting the process-wide policy
+    to SelectorEventLoop fixed the psycopg crash but then broke the SDK
+    subprocess with `NotImplementedError`), so rather than pick one loop
+    policy for the whole process, each call here -- already a fresh,
+    short-lived connection, see the class docstring -- runs to
+    completion in a throwaway thread with its own selector loop instead.
+    On non-Windows platforms the caller's own loop already supports
+    psycopg directly, so this is a no-op passthrough.
+    """
+    if sys.platform != "win32":
+        return await coro
+    return await asyncio.get_running_loop().run_in_executor(None, _run_coro_on_selector_loop, coro)
 
 _CREATE_TABLE_SQL = """
 CREATE TABLE IF NOT EXISTS orchestrator_cases (
@@ -106,34 +144,43 @@ class SupervisorRoutingLog:
         self._database_url = database_url
 
     async def setup(self) -> None:
-        async with await psycopg.AsyncConnection.connect(self._database_url) as conn:
-            await conn.execute(_CREATE_ROUTING_LOG_TABLE_SQL)
-            await conn.execute(_ADD_REVIEW_COLUMNS_SQL)
+        async def _do() -> None:
+            async with await psycopg.AsyncConnection.connect(self._database_url) as conn:
+                await conn.execute(_CREATE_ROUTING_LOG_TABLE_SQL)
+                await conn.execute(_ADD_REVIEW_COLUMNS_SQL)
+
+        await _run_pg(_do())
 
     async def record(self, *, delegate: str, confidence: str, rationale: str, request_excerpt: str) -> int:
-        async with await psycopg.AsyncConnection.connect(self._database_url) as conn:
-            cursor = await conn.execute(
-                "INSERT INTO supervisor_routing_log "
-                "(delegate, confidence, rationale, request_excerpt) VALUES (%s, %s, %s, %s) "
-                "RETURNING id",
-                (delegate, confidence, rationale, request_excerpt),
-            )
-            row = await cursor.fetchone()
-        return row[0]
+        async def _do() -> int:
+            async with await psycopg.AsyncConnection.connect(self._database_url) as conn:
+                cursor = await conn.execute(
+                    "INSERT INTO supervisor_routing_log "
+                    "(delegate, confidence, rationale, request_excerpt) VALUES (%s, %s, %s, %s) "
+                    "RETURNING id",
+                    (delegate, confidence, rationale, request_excerpt),
+                )
+                row = await cursor.fetchone()
+            return row[0]
+
+        return await _run_pg(_do())
 
     async def list_low_confidence(self, limit: int = 50) -> list[dict]:
         """The actual answer to "does it depend on someone noticing":
         this is what a human (or a scheduled job) checks instead --
         every routing the Supervisor itself flagged as a close call,
         newest first, regardless of whether it later turned out right."""
-        async with await psycopg.AsyncConnection.connect(self._database_url) as conn:
-            cursor = await conn.execute(
-                "SELECT id, delegate, confidence, rationale, request_excerpt, created_at, reviewed_correct "
-                "FROM supervisor_routing_log WHERE confidence = 'low' "
-                "ORDER BY created_at DESC LIMIT %s",
-                (limit,),
-            )
-            rows = await cursor.fetchall()
+        async def _do() -> list[tuple]:
+            async with await psycopg.AsyncConnection.connect(self._database_url) as conn:
+                cursor = await conn.execute(
+                    "SELECT id, delegate, confidence, rationale, request_excerpt, created_at, reviewed_correct "
+                    "FROM supervisor_routing_log WHERE confidence = 'low' "
+                    "ORDER BY created_at DESC LIMIT %s",
+                    (limit,),
+                )
+                return await cursor.fetchall()
+
+        rows = await _run_pg(_do())
         return [
             {
                 "id": row[0],
@@ -169,9 +216,12 @@ class SupervisorRoutingLog:
         query += "ORDER BY created_at ASC LIMIT %s"
         params.append(limit)
 
-        async with await psycopg.AsyncConnection.connect(self._database_url) as conn:
-            cursor = await conn.execute(query, params)
-            rows = await cursor.fetchall()
+        async def _do() -> list[tuple]:
+            async with await psycopg.AsyncConnection.connect(self._database_url) as conn:
+                cursor = await conn.execute(query, params)
+                return await cursor.fetchall()
+
+        rows = await _run_pg(_do())
         return [
             {
                 "id": row[0],
@@ -185,12 +235,16 @@ class SupervisorRoutingLog:
         ]
 
     async def mark_reviewed(self, row_id: int, *, correct: bool) -> None:
-        async with await psycopg.AsyncConnection.connect(self._database_url) as conn:
-            result = await conn.execute(
-                "UPDATE supervisor_routing_log SET reviewed_correct = %s, reviewed_at = now() WHERE id = %s",
-                (correct, row_id),
-            )
-        if result.rowcount == 0:
+        async def _do() -> int:
+            async with await psycopg.AsyncConnection.connect(self._database_url) as conn:
+                result = await conn.execute(
+                    "UPDATE supervisor_routing_log SET reviewed_correct = %s, reviewed_at = now() WHERE id = %s",
+                    (correct, row_id),
+                )
+                return result.rowcount
+
+        rowcount = await _run_pg(_do())
+        if rowcount == 0:
             raise ValueError(f"no supervisor_routing_log row with id={row_id}")
 
     async def calibration_report(self) -> dict:
@@ -198,11 +252,15 @@ class SupervisorRoutingLog:
         fraction of each confidence bucket turned out wrong. If "low"
         isn't meaningfully worse than "high", confidence isn't carrying
         real signal -- see the class docstring."""
-        async with await psycopg.AsyncConnection.connect(self._database_url) as conn:
-            cursor = await conn.execute(
-                "SELECT confidence, reviewed_correct FROM supervisor_routing_log WHERE reviewed_correct IS NOT NULL"
-            )
-            rows = await cursor.fetchall()
+        async def _do() -> list[tuple]:
+            async with await psycopg.AsyncConnection.connect(self._database_url) as conn:
+                cursor = await conn.execute(
+                    "SELECT confidence, reviewed_correct FROM supervisor_routing_log "
+                    "WHERE reviewed_correct IS NOT NULL"
+                )
+                return await cursor.fetchall()
+
+        rows = await _run_pg(_do())
 
         buckets: dict[str, dict[str, int]] = {
             "high": {"reviewed": 0, "wrong": 0},
