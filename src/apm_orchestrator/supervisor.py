@@ -37,6 +37,7 @@ from claude_agent_sdk import (
 
 from apm_orchestrator.agents.customer_onboarding.agent import run_customer_onboarding
 from apm_orchestrator.agents.order_renewal.agent import run_order_renewal
+from apm_orchestrator.config import load_settings
 from apm_orchestrator.db import SupervisorRoutingLog
 
 DELEGATE_PREFIX = "mcp__supervisor_delegates__delegate_to_"
@@ -159,6 +160,7 @@ job" boundary apm_connectors keeps for its own connectors)."""
 
 
 def _build_options() -> ClaudeAgentOptions:
+    settings = load_settings()
     return ClaudeAgentOptions(
         system_prompt=SYSTEM_PROMPT,
         mcp_servers={"supervisor_delegates": supervisor_server},
@@ -168,6 +170,14 @@ def _build_options() -> ClaudeAgentOptions:
             "mcp__supervisor_delegates__delegate_to_order_renewal",
             "mcp__supervisor_delegates__delegate_to_customer_onboarding",
         ],
+        # Explicit and cost-conscious, not the Claude Code CLI's own
+        # default -- see config.py's load_settings() for why. Routing is
+        # a normal turn (decide a delegate or decline, once) so a small
+        # turn ceiling and budget are real backstops, not a risk of
+        # cutting off a legitimate call.
+        model=settings.supervisor_model,
+        max_turns=5,
+        max_budget_usd=settings.supervisor_max_budget_usd,
     )
 
 

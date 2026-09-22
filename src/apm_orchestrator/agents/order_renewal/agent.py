@@ -27,6 +27,7 @@ from claude_agent_sdk import (
 )
 
 from apm_orchestrator.agents.order_renewal.policy import OrderRenewalPolicy, load_policy
+from apm_orchestrator.config import load_settings
 from apm_orchestrator.tools import apm_connectors_server
 
 Mode = Literal["workflow", "report"]
@@ -121,6 +122,7 @@ before deciding the next step:
 
 def _build_options(mode: Mode, policy: OrderRenewalPolicy) -> ClaudeAgentOptions:
     tools = WORKFLOW_TOOLS if mode == "workflow" else REPORTING_TOOLS
+    settings = load_settings()
     return ClaudeAgentOptions(
         system_prompt=_render_system_prompt(mode, policy),
         mcp_servers={"apm_connectors": apm_connectors_server},
@@ -129,6 +131,15 @@ def _build_options(mode: Mode, policy: OrderRenewalPolicy) -> ClaudeAgentOptions
         # top, and "bypassPermissions" specifically would fail outright
         # when this process runs as root.
         allowed_tools=tools,
+        # Explicit and cost-conscious, not the Claude Code CLI's own
+        # default -- see config.py's load_settings() for why. More
+        # headroom than the Supervisor's: this loop chains several tool
+        # calls (detect -> verify -> check blockers -> up to 3 proposals),
+        # but the budget is still a backstop against a runaway loop, not
+        # a number tuned for a specific workflow's real cost.
+        model=settings.business_agent_model,
+        max_turns=25,
+        max_budget_usd=settings.business_agent_max_budget_usd,
     )
 
 

@@ -115,6 +115,22 @@ not just an upcoming one. See
 - Adding a new `@tool` to `tools.py` is additive; changing an existing
   one's `input_schema` to match a breaking change in `apm_connectors`'
   own `/tools/*` contract needs both repos updated together.
+- **Every new `ClaudeAgentOptions` call site sets `model` and
+  `max_budget_usd` explicitly, from `load_settings()` -- never leaves
+  them unset.** `model=None` silently inherits the local Claude Code
+  CLI's own default (not something this repo controls, and can change
+  across a CLI update with no visible diff here); found missing
+  everywhere in a cost audit prompted by a real account running out of
+  credits after one 8-prompt calibration batch
+  (`FAILURES_AND_LESSONS_LEARNED.md` section 10). `max_budget_usd` is a
+  per-call dollar backstop against exactly that failure mode, not an
+  accuracy tradeoff -- set it generously enough not to cut off a
+  legitimate real workflow, same reasoning as `max_turns`. Changing
+  which *model* a call site uses (not just pinning the current one) is
+  a different kind of change -- validate it against
+  `tests/test_supervisor_routing_eval.py` (for `SUPERVISOR_MODEL`) or an
+  equivalent quality check before committing to it, per
+  `README.md`'s "Model & cost configuration".
 - **A wrong-but-plausible Supervisor routing needs to be caught at
   decision time, not reconstructed afterward.** The adversarial case (a
   request matching no specialized agent) was already covered by a clean

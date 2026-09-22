@@ -20,6 +20,7 @@ from claude_agent_sdk import (
 )
 
 from apm_orchestrator.agents.customer_onboarding.policy import CustomerOnboardingPolicy, load_policy
+from apm_orchestrator.config import load_settings
 from apm_orchestrator.tools import apm_connectors_server
 
 WORKFLOW_TOOLS = [
@@ -94,12 +95,21 @@ before deciding the next step:
 
 
 def _build_options(policy: CustomerOnboardingPolicy) -> ClaudeAgentOptions:
+    settings = load_settings()
     return ClaudeAgentOptions(
         system_prompt=_render_system_prompt(policy),
         mcp_servers={"apm_connectors": apm_connectors_server},
         # Listing a tool here is what auto-approves it at the SDK layer
         # (live-verified) -- see tools.py's module docstring.
         allowed_tools=WORKFLOW_TOOLS,
+        # Explicit and cost-conscious, not the Claude Code CLI's own
+        # default -- see config.py's load_settings() and
+        # order_renewal/agent.py's own _build_options for the same
+        # reasoning (this agent is the same detect/verify/act/record
+        # shape).
+        model=settings.business_agent_model,
+        max_turns=25,
+        max_budget_usd=settings.business_agent_max_budget_usd,
     )
 
 
