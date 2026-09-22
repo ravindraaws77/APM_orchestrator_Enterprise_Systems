@@ -22,6 +22,14 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import sys
+
+# psycopg's async mode needs a selector-based event loop; Windows'
+# asyncio default (ProactorEventLoop) isn't compatible with it -- same
+# fix as run_case.py/show_case.py/poller.py/cli.py. No effect on other
+# platforms.
+if sys.platform == "win32":
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
 from apm_orchestrator.config import load_settings
 from apm_orchestrator.db import SupervisorRoutingLog

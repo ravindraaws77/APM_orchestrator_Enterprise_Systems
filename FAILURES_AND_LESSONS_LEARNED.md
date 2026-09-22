@@ -129,9 +129,22 @@ resolved this immediately — faster than a third guess would have been.
   or useful for running the script; dismiss it, don't pick an app.
 - **`psycopg.InterfaceError: Psycopg cannot use the 'ProactorEventLoop'`**
   — Windows' default asyncio event loop isn't compatible with
-  `psycopg`'s async mode. Already fixed in this repo's own scripts via
+  `psycopg`'s async mode. Fixed in this repo's own scripts via
   `asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())`
-  on `sys.platform == "win32"`, before any asyncio-touching import.
+  on `sys.platform == "win32"`, before any asyncio-touching import --
+  **but this guard doesn't travel with the file that needs it; it
+  travels with whether that file touches Postgres, which can change
+  later.** `cli.py` never needed it when written (no Postgres at all),
+  then started calling `SupervisorRoutingLog.setup()` once routing-
+  confidence logging landed and silently inherited this exact bug on
+  Windows, live-reported by a real user running `apm-orchestrator` for
+  the first time post-upgrade. Same gap hit the two new
+  `scripts/review_routing_log.py`/`calibration_report.py` from day one.
+  All three fixed the same way. The actual lesson: any `asyncio.run()`
+  entry point that starts importing/calling into `db.py` needs this
+  guard added in the same change, not caught later -- it's not a
+  one-time repo-wide fix, it's a per-file obligation every new
+  Postgres-touching entry point has to remember on its own.
 
 ---
 

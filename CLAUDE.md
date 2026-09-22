@@ -142,6 +142,20 @@ not just an upcoming one. See
   bucket once enough rows are reviewed. A routing decision made before
   `reviewed_correct` existed has no way to recover its ground truth
   later -- capture it as it happens, don't plan to backfill it.
+- **A new `asyncio.run()` entry point that starts calling into `db.py`
+  needs the Windows event-loop guard added in the same change, not
+  caught later.** `psycopg`'s async mode isn't compatible with Windows'
+  default `ProactorEventLoop`; the fix
+  (`asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())`
+  on `sys.platform == "win32"`, before any Postgres-touching import) is
+  proven in `run_case.py`/`show_case.py`/`poller.py`, but it doesn't
+  travel with the file automatically -- it travels with whether that
+  file touches Postgres, which can change later. `cli.py` didn't need it
+  when written, then silently inherited the bug once
+  `SupervisorRoutingLog` logging landed; the same gap shipped in
+  `scripts/review_routing_log.py`/`calibration_report.py` from day one.
+  Live-reported by a real user on Windows running `apm-orchestrator` --
+  see `FAILURES_AND_LESSONS_LEARNED.md`.
 
 ## Layout
 
