@@ -26,15 +26,22 @@ review. Re-run this (editing PROMPTS to add fresh variety each time,
 so review keeps seeing new decisions, not repeats) as part of ongoing
 usage, not as a one-shot batch.
 
+A prompt that fails mid-run (credit exhaustion, a transient API error,
+...) stops the batch there rather than continuing past it silently --
+the failure is printed along with the exact --start value to resume
+from, so a partial run never has to be restarted from the top.
+
 Usage:
     python scripts/run_calibration_batch.py
     python scripts/run_calibration_batch.py --limit 3   # just try the first few
+    python scripts/run_calibration_batch.py --start 5   # resume from prompt 5 (1-indexed)
 """
 
 from __future__ import annotations
 
 import argparse
 import asyncio
+import sys
 
 from apm_orchestrator.config import load_settings
 from apm_orchestrator.db import SupervisorRoutingLog
@@ -71,7 +78,10 @@ PROMPTS: list[str] = [
 ]
 
 
-async def main(limit: int | None) -> None:
+async def main(start: int, limit: int | None) -> None:
+    if start < 1 or start > len(PROMPTS):
+        raise SystemExit(f"--start must be between 1 and {len(PROMPTS)} (got {start})")
+
     settings = load_settings()
     if not settings.database_url:
         raise SystemExit("DATABASE_URL is required")
@@ -79,11 +89,18 @@ async def main(limit: int | None) -> None:
     routing_log = SupervisorRoutingLog(settings.database_url)
     await routing_log.setup()
 
-    prompts = PROMPTS[:limit] if limit else PROMPTS
+    # 1-indexed absolute positions in PROMPTS, so progress and --start
+    # both refer to the same numbering regardless of where this run
+    # starts or ends -- resuming a partial run never means recomputing
+    # an offset by hand.
+    end = start - 1 + limit if limit else len(PROMPTS)
+    indices = range(start, min(end, len(PROMPTS)) + 1)
+
     logged = 0
     try:
-        for i, prompt in enumerate(prompts, 1):
-            print(f"\n=== [{i}/{len(prompts)}] {prompt[:70]!r}... ===")
+        for i in indices:
+            prompt = PROMPTS[i - 1]
+            print(f"\n=== [{i}/{len(PROMPTS)}] {prompt[:70]!r}... ===")
             # list_for_review (no confidence filter) is oldest-first over
             # every unreviewed row -- since nothing in a fresh batch has
             # been reviewed yet, its last entry is this call's own new row,
@@ -92,7 +109,19 @@ async def main(limit: int | None) -> None:
             # only gives back final_text) is what confirms whether this
             # specific prompt actually logged one at all.
             before_ids = {row["id"] for row in await routing_log.list_for_review(limit=10_000)}
-            result = await run_supervisor(prompt, routing_log=routing_log)
+            try:
+                result = await run_supervisor(prompt, routing_log=routing_log)
+            except Exception as exc:
+                # A failure here (credit exhaustion, a transient API
+                # error, ...) means every prompt from `i` on is still
+                # unrun -- print exactly the command that resumes there
+                # instead of a bare traceback with no next step, since
+                # this is the actual failure mode that prompted adding
+                # --start in the first place.
+                print(f"\nFAILED on prompt {i}: {exc!r}")
+                print(f"{logged}/{i - start} prompt(s) before this one were logged successfully.")
+                print(f"Resume with:\n  python scripts/run_calibration_batch.py --start {i}")
+                sys.exit(1)
             after_rows = await routing_log.list_for_review(limit=10_000)
             print(result[:300])
             new_rows = [row for row in after_rows if row["id"] not in before_ids]
@@ -106,7 +135,7 @@ async def main(limit: int | None) -> None:
         await aclose_client()
 
     print(
-        f"\nDone -- {logged}/{len(prompts)} prompt(s) delegated and logged.\n"
+        f"\nDone -- {logged}/{len(indices)} prompt(s) delegated and logged.\n"
         "Review with:\n"
         "  python scripts/review_routing_log.py list --confidence low\n"
         "  python scripts/review_routing_log.py list --confidence high\n"
@@ -117,6 +146,7 @@ async def main(limit: int | None) -> None:
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--limit", type=int, default=None, help="only run the first N prompts")
+    parser.add_argument("--limit", type=int, default=None, help="only run N prompts starting at --start")
+    parser.add_argument("--start", type=int, default=1, help="1-indexed prompt to resume from (default 1)")
     args = parser.parse_args()
-    asyncio.run(main(args.limit))
+    asyncio.run(main(args.start, args.limit))
