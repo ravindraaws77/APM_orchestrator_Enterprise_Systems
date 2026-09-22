@@ -106,6 +106,28 @@ If you're contributing changes back upstream, keep the `REPLACE_WITH_...`
 placeholders in your commits -- both repos are public, and a real
 project key belongs only in your own local checkout, not in a shared PR.
 
+### Model & cost configuration
+
+The Supervisor and every specialized agent pin an explicit model and a
+per-call dollar budget via `SUPERVISOR_MODEL`/`BUSINESS_AGENT_MODEL` and
+`SUPERVISOR_MAX_BUDGET_USD`/`BUSINESS_AGENT_MAX_BUDGET_USD`
+(`.env.example`; both model vars default to `claude-sonnet-5` if unset)
+-- deliberately not left to inherit the local Claude Code CLI's own
+default, which `ClaudeAgentOptions` falls back to silently and isn't
+something this repo controls. `max_budget_usd` is a safety backstop
+against a runaway or misbehaving call, not a tuned production number --
+raise it if a legitimate real workflow ever hits the ceiling.
+
+Routing (`SUPERVISOR_MODEL`) is a bounded classification task (pick one
+of two delegates, or decline); the business agents
+(`BUSINESS_AGENT_MODEL`) chain several tool calls per run but are
+structured orchestration, not open-ended reasoning -- neither needs
+Opus-tier capability. `pytest tests/test_supervisor_routing_eval.py`
+(needs `ANTHROPIC_API_KEY`) is the way to validate a further step down
+to `claude-haiku-4-5` for routing specifically before committing to it;
+don't change `SUPERVISOR_MODEL` in a shared config without re-running
+that eval first.
+
 ### Running a durable case (Postgres required)
 
 ```bash
