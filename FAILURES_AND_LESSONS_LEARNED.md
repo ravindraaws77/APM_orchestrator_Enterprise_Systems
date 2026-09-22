@@ -667,15 +667,78 @@ every high-confidence routing reviewed was correct, and the one wrong
 routing in the whole sample was a low-confidence one -- exactly the
 shape calibration is supposed to detect.
 
+**11.3 -- The one miss, specifically: the Supervisor isn't fully
+deterministic on its own hardest boundary case.** Pulled the full
+26-row trace directly from `supervisor_routing_log`
+(`SELECT id, delegate, confidence, reviewed_correct, request_excerpt,
+rationale FROM supervisor_routing_log ORDER BY id`) rather than relying
+on the aggregate count alone, since "one low-confidence row was wrong"
+on its own doesn't say which one or why. Rows 7 and 15 turned out to be
+the *exact same prompt*, run in two different batches ("Vandelay
+Industries wants to extend their trial into a first paid contract --
+they've never been a real customer before"):
+
+| id | delegate | confidence | verdict |
+| --- | --- | --- | --- |
+| 7 | `customer_onboarding` | low | correct |
+| 15 | `order_renewal` | low | **incorrect** |
+
+Same input, two different delegate decisions across runs. Both times
+the Supervisor flagged low confidence -- correctly signaling "this one's
+shaky" even though only one of the two actual outcomes was wrong. This
+is a stronger finding than the aggregate number alone: the confidence
+signal caught its own inconsistency on a repeated input, not just a
+one-off miss on a novel one.
+
+**Full per-row trace** (id, delegate, confidence, verdict; company/gist
+in place of the full request text -- rows 1-9 are batch 1's first run,
+10-17 are the accidental duplicate re-run from 11.1, 18-26 are batch
+2's refreshed set):
+
+| id | request (gist) | delegate | confidence | verdict |
+| --- | --- | --- | --- | --- |
+| 1 | Acme Corp -- license renewal | order_renewal | high | correct |
+| 2 | Wayne Enterprises -- security contract renewal | order_renewal | high | correct |
+| 3 | Sterling Cooper -- annual license renewal | order_renewal | high | correct |
+| 4 | Oscorp -- brand-new deal, onboarding | customer_onboarding | high | correct |
+| 5 | Prestige Worldwide -- brand-new customer | customer_onboarding | high | correct |
+| 6 | Tyrell Corp -- renew w/ new payment schedule | order_renewal | high | correct |
+| 7 | Vandelay Industries -- trial -> first paid contract | customer_onboarding | low | correct |
+| 8 | Dunder Mifflin -- expansion + renewal confirmation | order_renewal | low | correct |
+| 9 | (unnamed) -- contract expanding to new region | order_renewal | low | correct |
+| 10 | Wayne Enterprises (rerun) | order_renewal | high | correct |
+| 11 | Sterling Cooper (rerun) | order_renewal | high | correct |
+| 12 | Oscorp (rerun) | customer_onboarding | high | correct |
+| 13 | Prestige Worldwide (rerun) | customer_onboarding | high | correct |
+| 14 | Tyrell Corp (rerun) | order_renewal | high | correct |
+| 15 | Vandelay Industries (rerun) -- same prompt as #7 | order_renewal | low | **incorrect** |
+| 16 | Dunder Mifflin (rerun) | order_renewal | low | correct |
+| 17 | (unnamed, rerun) -- new region | order_renewal | low | correct |
+| 18 | Gekko & Co -- license renewal confirmed | order_renewal | high | correct |
+| 19 | Hexagon Systems -- support contract lapsing | order_renewal | high | correct |
+| 20 | Zorg Industries -- brand-new customer | customer_onboarding | high | correct |
+| 21 | Silverlake Industries -- new logo | customer_onboarding | high | correct |
+| 22 | Weyland-Yutani -- renew + consolidate contracts | order_renewal | high | correct |
+| 23 | Blue Sun Corporation -- pilot -> first real contract | customer_onboarding | low | correct |
+| 24 | Nakatomi Trading -- expansion + renewal paperwork | order_renewal | low | correct |
+| 25 | Cavanaugh & Associates -- kickoff for next contract phase | order_renewal | low | correct |
+| 26 | Praxis Corp -- onboarding-style check-in before renewal | order_renewal | low | correct |
+
 **Takeaway, stated plainly:** 10 reviewed low-confidence rows is
 `calibration_report.py`'s own minimum threshold for giving a verdict,
 not a sample large enough to call this settled -- one wrong call is
 currently 100% of the low-confidence error rate, so a single additional
 miss or a single correction flips the number materially. "Calibrated"
-here means "directionally right on a first real sample," not "proven."
-Keep sampling and reviewing, per this repo's own `README.md` guidance,
-before leaning on this signal for anything higher-stakes than a review
-queue.
+here means "directionally right on a first real sample," not "proven" --
+and the one miss being a non-deterministic flip on a repeated prompt
+(11.3), not a novel failure, is itself informative: it suggests the
+Supervisor's confidence signal may be better at flagging genuinely
+ambiguous prompts (where even the model itself isn't consistent) than
+at flagging prompts it will reliably get wrong. Worth re-testing this
+exact prompt a few more times specifically, not just sampling broadly,
+before drawing a stronger conclusion. Keep sampling and reviewing, per
+this repo's own `README.md` guidance, before leaning on this signal for
+anything higher-stakes than a review queue.
 
 ---
 
