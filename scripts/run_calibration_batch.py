@@ -48,33 +48,41 @@ from apm_orchestrator.db import SupervisorRoutingLog
 from apm_orchestrator.supervisor import run_supervisor
 from apm_orchestrator.tools import aclose_client
 
-# Fresh company names, distinct from evals/routing_cases.py, covering the
-# same shapes that dataset uses (see its module docstring) -- skewed
-# toward adversarial/ambiguous on purpose, since only a delegated call is
-# logged at all, and "low" confidence rows are the harder bucket to fill:
-# a clear case almost always comes back "high."
+# Batch 2. Fresh company names, distinct from both evals/routing_cases.py
+# and batch 1's own prompts (Wayne Enterprises, Sterling Cooper, Oscorp,
+# Prestige Worldwide, Tyrell Corp, Vandelay Industries, Dunder Mifflin --
+# re-running those verbatim would just re-log near-duplicate decisions,
+# not new signal). Batch 1 came back 5 high / 3 low -- calibration needs
+# 10+ REVIEWED rows in each bucket, and "high" already has more of a
+# head start, so this batch is skewed even further toward ambiguous
+# shapes to close the gap on "low" faster.
 PROMPTS: list[str] = [
     # -- clear: Order-Renewal --
-    "Wayne Enterprises' security services contract is up for renewal in "
-    "three weeks -- they emailed asking us to proceed.",
-    "Sterling Cooper's annual license expires next Friday, please start "
-    "the renewal.",
+    "Gekko & Co's trading platform license renews at the end of the "
+    "month -- they've confirmed they want to continue.",
+    "Hexagon Systems is an existing customer whose support contract "
+    "lapses in two weeks -- get the renewal moving.",
     # -- clear: Customer-Onboarding --
-    "We just closed a brand-new deal with Oscorp -- first contract ever, "
-    "get their onboarding started.",
-    "Prestige Worldwide just signed as a brand-new customer -- kick off "
-    "onboarding and send the welcome packet.",
+    "We just signed Zorg Industries as a brand-new customer -- their "
+    "very first contract with us. Start onboarding.",
+    "Silverlake Industries closed as a new logo yesterday -- first time "
+    "doing business with them. Kick off onboarding.",
     # -- adversarial: trap wording, unambiguous once you check account status --
-    "Tyrell Corp wants to renew their contract but with a new payment "
-    "schedule -- same existing account as always.",
-    "Vandelay Industries wants to extend their trial into a first paid "
-    "contract -- they've never been a real customer before.",
+    "Weyland-Yutani, a five-year customer, wants to renew but "
+    "consolidate three separate contracts into one at renewal time.",
+    "Blue Sun Corporation's pilot program is up for renewal -- they "
+    "were never a paying customer, this would convert to their first "
+    "real contract.",
     # -- ambiguous: genuinely torn between both agents' definitions --
-    "Dunder Mifflin, a longtime customer, just closed an expansion deal "
-    "for a second office -- get a kickoff call scheduled and send a "
-    "renewal confirmation too.",
-    "This account's contract is expanding into a new region -- can you "
-    "get things moving?",
+    "Nakatomi Trading, an existing customer, just expanded into a new "
+    "business unit -- set up a welcome call and update their renewal "
+    "paperwork.",
+    "Cavanaugh & Associates wants a kickoff meeting scheduled for the "
+    "next phase of their contract.",
+    "Praxis Corp's account team asked for an onboarding-style check-in "
+    "ahead of their upcoming contract renewal.",
+    "Rand Enterprises has a new team joining under their existing "
+    "agreement -- can you get things set up for them?",
 ]
 
 
