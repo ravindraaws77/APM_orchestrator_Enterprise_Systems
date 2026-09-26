@@ -70,6 +70,9 @@ See `apm_connectors/docs/security-guardrails.md`.
   `agents/<name>/` package with its own `policy.yaml` + `case_graph.py`
   picking a toolbelt subset from `tools.py`, plus a new
   `delegate_to_<name>` tool in `supervisor.py`.
+- A retrieval index and knowledge agent -- designed, not built. See
+  `KNOWLEDGE_AGENT_AND_RETRIEVAL_INDEX.md` for where each piece lives
+  and why (this repo, not `apm_connectors`), and the build order.
 - The case graph (`case_graph.py`, LangGraph) hasn't been run against
   live Gmail/Calendar/Salesforce credentials yet -- only against an
   unconfigured server (a clean, graceful stop) and, for the

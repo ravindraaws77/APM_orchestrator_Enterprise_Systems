@@ -86,6 +86,17 @@ not just an upcoming one. See
   `src/apm_orchestrator/tools.py`'s tools that business process needs as
   its toolbelt — never a per-connector agent. Register its delegate tool
   in `supervisor.py`.
+- **The retrieval index and the knowledge agent live in this repo,
+  never in `apm_connectors`.** Decided in
+  `KNOWLEDGE_AGENT_AND_RETRIEVAL_INDEX.md`: an index persists document
+  text and calls an embeddings model, both of which `apm_connectors`'
+  own guardrails rule out. The indexer reads sources only through
+  connectors' existing read routes, under its own API key. Business
+  agents get `knowledge_search` as a tool in their own toolbelt; they
+  never delegate to the knowledge agent (no agent-to-agent hop). The
+  knowledge agent's toolbelt stays read-only, permanently. Each agent's
+  searchable collections come from its `policy.yaml`, applied as a SQL
+  filter, never left to the prompt.
 - **Policy is data, not code.** What counts as "a renewal" (or whatever
   the next agent's equivalent trigger is), SLA windows, and
   blocking-ticket rules belong in that agent's `policy.yaml`, loaded at
