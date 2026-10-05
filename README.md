@@ -62,6 +62,35 @@ of.
 must come from a real authenticated human, outside this repo's control.
 See `apm_connectors/docs/security-guardrails.md`.
 
+## Exposing the Supervisor over A2A
+
+`src/apm_orchestrator/a2a_server.py` makes the Supervisor callable by
+other agents over the [A2A (Agent2Agent) protocol](https://a2a-protocol.org/).
+MCP (`tools.py`) is how this repo's agents call *tools*; A2A is how
+*other agents* call this one.
+
+- **Discovery:** the Agent Card at `/.well-known/agent-card.json`
+  advertises two skills, `order_renewal` and `customer_onboarding`,
+  matching `supervisor.py`'s delegate tools.
+- **Calling:** JSON-RPC `SendMessage` at `/a2a` (send the
+  `A2A-Version: 1.0` header). Each message runs one `run_supervisor`
+  turn and returns a completed task whose artifact is the Supervisor's
+  answer.
+- **Approval boundary unchanged:** an A2A caller gets exactly what a
+  human caller of `run_supervisor` gets. Writes are still only proposed;
+  nothing here can approve a pending action.
+- **Auth:** set `A2A_API_KEY` and callers must send
+  `Authorization: Bearer <key>` (the card itself stays public).
+
+```bash
+pip install -e ".[a2a]"
+apm-orchestrator-a2a                                   # serves on 127.0.0.1:9999
+python scripts/a2a_client_demo.py "Acme wants to renew their licence"
+```
+
+Not done yet: streaming (`SendStreamingMessage`) for long agent runs, a
+persistent task store (tasks are in memory today), and signed Agent Cards.
+
 ## What's not here yet
 
 - The avatar/voice/visual interface (Phase 2).
@@ -216,8 +245,9 @@ pytest -q
 ```
 
 Runs without live credentials or a running `apm_connectors` server —
-`connectors_client` tests use `httpx.MockTransport`, and `policy` tests
-just load the bundled YAML.
+`connectors_client` tests use `httpx.MockTransport`, `policy` tests
+just load the bundled YAML, and `test_a2a_server.py` uses a fake
+Supervisor (it skips if the `a2a` extra isn't installed).
 
 ## End-to-end smoke test (real server, no mocks)
 
