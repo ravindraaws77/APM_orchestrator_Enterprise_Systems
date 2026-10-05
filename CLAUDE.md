@@ -229,6 +229,9 @@ src/apm_orchestrator/
   tools.py             one Claude Agent SDK @tool per apm_connectors route
   supervisor.py         business-intent routing, delegates to agents,
                          requires confidence/rationale on every delegation
+  a2a_server.py         exposes the Supervisor to other agents over A2A
+                         (Agent Card + JSON-RPC SendMessage); never exposes
+                         approval -- an A2A caller can only propose
   poller.py             standalone process: resumes cases once their
                          apm_connectors action resolves (--once or --loop)
   agents/
@@ -261,6 +264,7 @@ scripts/
   e2e_smoke.py          real-server smoke test, no mocks
   run_live_tests.py     run the real-Postgres + real-server mechanics tests,
                         always against apm_connectors' test server
+  a2a_client_demo.py    call the Supervisor the way another agent would, over A2A
 tests/                 unit tests (mocked client, no infra) plus
                         test_case_graph_mechanics.py (real Postgres +
                         real server, skipped unless configured) and
