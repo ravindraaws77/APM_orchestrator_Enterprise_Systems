@@ -787,9 +787,14 @@ closed deal -- and leave the intentionally-old fixtures (`2020-01-01`,
 whose whole point is "long past") as they are. Only test files change;
 the agent logic is correct as is. (An alternative is freezing the clock
 -- e.g. `freezegun` or monkeypatching a `today()` helper -- which keeps
-literal dates readable but adds a dependency.) Status at time of
-writing: diagnosed, fix to be made on a branch and verified with a
-full `pytest -q` showing 0 failed.
+literal dates readable but adds a dependency.) Done in commit
+`c43ebb9` (branch `claude/relative-test-dates`), made with Claude Code
+on the new Mac: the onboarding fixture's default `close_date` is now
+`date.today() - timedelta(days=3)`, and the account-matching tests use
+an `_upcoming()` helper (`date.today() + timedelta(days=10)`, inside the
+60-day `renewal_window_days`). Two test files changed, no agent logic
+touched; the deliberately far-off literals (`2020-01-01`,
+`2099-01-01`) are kept.
 
 **Takeaway:** any test whose inputs are absolute dates and whose code
 under test reads the real clock is a time bomb: it passes in CI until a
