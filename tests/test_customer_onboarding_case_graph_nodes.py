@@ -7,6 +7,8 @@ tests/test_case_graph_nodes.py (order_renewal's equivalent).
 
 from __future__ import annotations
 
+from datetime import date, timedelta
+
 import httpx
 import pytest
 from langgraph.checkpoint.memory import MemorySaver
@@ -35,7 +37,10 @@ def _config(case_id: str) -> dict:
     return {"configurable": {"thread_id": case_id}}
 
 
-def _opportunity(record_id="opp1", account_id="acc1", close_date="2026-09-10"):
+def _opportunity(record_id="opp1", account_id="acc1", close_date=None):
+    # Relative to today, not a literal date, so the default stays inside
+    # the 14d onboarding window no matter when the suite runs.
+    close_date = close_date or (date.today() - timedelta(days=3)).isoformat()
     return {
         "record_id": record_id,
         "object_type": "Opportunity",

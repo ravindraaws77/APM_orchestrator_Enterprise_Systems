@@ -27,6 +27,12 @@ def _client_with_handler(handler) -> ConnectorsClient:
     return ConnectorsClient(settings=settings, transport=httpx.MockTransport(handler))
 
 
+def _upcoming(days: int = 10) -> str:
+    """A CloseDate inside the renewal window and not yet past due, relative
+    to today so these fixtures never expire."""
+    return (date.today() + timedelta(days=days)).isoformat()
+
+
 def _opportunity(record_id, account_id, account_name, close_date, is_closed=False, name="Renewal"):
     return {
         "record_id": record_id,
@@ -56,8 +62,8 @@ async def test_falls_back_and_tie_breaks_on_normalized_name(monkeypatch):
         return httpx.Response(
             200,
             json=[
-                _opportunity("opp-real", "acc-real", "United Oil & Gas Corp.", "2026-10-01"),
-                _opportunity("opp-uk", "acc-uk", "United Oil & Gas Corp (UK)", "2026-10-01"),
+                _opportunity("opp-real", "acc-real", "United Oil & Gas Corp.", _upcoming()),
+                _opportunity("opp-uk", "acc-uk", "United Oil & Gas Corp (UK)", _upcoming()),
             ],
         )
 
@@ -83,8 +89,8 @@ async def test_stops_on_ambiguous_match_across_different_accounts(monkeypatch):
         return httpx.Response(
             200,
             json=[
-                _opportunity("opp-1", "acc-1", "Acme Corp.", "2026-10-01"),
-                _opportunity("opp-2", "acc-2", "acme corp", "2026-10-01"),
+                _opportunity("opp-1", "acc-1", "Acme Corp.", _upcoming()),
+                _opportunity("opp-2", "acc-2", "acme corp", _upcoming()),
             ],
         )
 
@@ -105,7 +111,7 @@ async def test_surfaces_stale_open_opportunities_without_stopping(monkeypatch):
         return httpx.Response(
             200,
             json=[
-                _opportunity("opp-current", "acc-1", "Acme Corp", "2026-10-01"),
+                _opportunity("opp-current", "acc-1", "Acme Corp", _upcoming()),
                 _opportunity(
                     "opp-stale", "acc-1", "Acme Corp", "2020-01-01", is_closed=False, name="Old deal"
                 ),
