@@ -740,6 +740,139 @@ before drawing a stronger conclusion. Keep sampling and reviewing, per
 this repo's own `README.md` guidance, before leaning on this signal for
 anything higher-stakes than a review queue.
 
+## 12. Time-bomb tests: five tests started failing with no code change
+
+Found on 2026-10-24 while setting up a fresh macOS machine (see §13) --
+the first full `pytest -q` run in a month.
+
+**Symptom:** `5 failed, 22 passed, 42 skipped`, on a clean clone of
+`main` (`8da9628`) that had passed in September. The failures:
+
+- `test_verify_account_matching.py::test_surfaces_stale_open_opportunities_without_stopping`
+  -- `assert len(result["stale_opportunities"]) == 1` got `2`: both
+  `opp-current (Renewal, due 2026-10-01)` and `opp-stale (Old deal, due
+  2020-01-01)` were reported as stale.
+- Four in `test_customer_onboarding_case_graph_nodes.py`
+  (`test_verify_contact_stops_when_no_email`,
+  `test_check_blockers_stops_on_existing_onboarding_ticket`,
+  `test_full_happy_path_pauses_through_all_four_approvals_then_completes`,
+  `test_rejection_at_kickoff_call_stops_the_chain`) -- each stopped early
+  with `"Opportunity opp1 closed 44d ago, outside the 14d onboarding
+  window"` instead of reaching the step the test was actually about.
+
+**Investigation:** nothing in `src/` or `tests/` had changed since the
+last green run, so the inputs had to be what moved. Every failure
+message mentioned a date. The fixtures hardcode absolute dates:
+`_opportunity(..., close_date="2026-09-10")` in the onboarding tests
+(the shared default every test there uses) and `"2026-10-01"` for the
+"current" Opportunity in the account-matching tests. The code under
+test compares against `date.today()` (e.g. `customer_onboarding/
+case_graph.py`'s `days_since_close = (date.today() - date.fromisoformat(
+close_date_str)).days`, checked against `onboarding_window_days: 14`).
+
+**Root cause:** the tests were written when `2026-10-01` was in the
+future and `2026-09-10` was within 14 days. Once the calendar passed
+them, the agent logic did exactly what it should -- a past-due open
+Opportunity *is* stale, and a deal closed 44 days ago *is* outside a
+14-day onboarding window. The tests expired; the code didn't break.
+The onboarding tests are the clearer warning: four tests about contact
+lookup, blocking tickets, approvals and rejection all failed on the
+*same* unrelated date check, because a shared fixture default fed every
+one of them.
+
+**Fix:** make every test date relative to today instead of a literal --
+e.g. `(date.today() + timedelta(days=7)).isoformat()` for an upcoming
+renewal, `(date.today() - timedelta(days=3)).isoformat()` for a recently
+closed deal -- and leave the intentionally-old fixtures (`2020-01-01`,
+whose whole point is "long past") as they are. Only test files change;
+the agent logic is correct as is. (An alternative is freezing the clock
+-- e.g. `freezegun` or monkeypatching a `today()` helper -- which keeps
+literal dates readable but adds a dependency.) Done in commit
+`c43ebb9`, merged as [PR #21](https://github.com/ravindraaws77/APM_orchestrator_Enterprise_Systems/pull/21), made with Claude Code
+on the new Mac: the onboarding fixture's default `close_date` is now
+`date.today() - timedelta(days=3)`, and the account-matching tests use
+an `_upcoming()` helper (`date.today() + timedelta(days=10)`, inside the
+60-day `renewal_window_days`). Two test files changed, no agent logic
+touched; the deliberately far-off literals (`2020-01-01`,
+`2099-01-01`) are kept.
+
+**Takeaway:** any test whose inputs are absolute dates and whose code
+under test reads the real clock is a time bomb: it passes in CI until a
+particular day, then fails with no change anywhere. Two rules follow:
+(1) in tests, express dates relative to `date.today()` (or freeze the
+clock) -- never a literal near "now"; (2) when a previously green suite
+fails with no code change, check what *outside* the code changed first
+-- the date, a live data source, an expired credential -- before
+touching logic that is behaving correctly. The scheduled CI runs this
+repo already has (`.github/workflows/eval.yml`) are exactly what would
+have caught this on the day it happened, if the unit suite ran on a
+schedule too.
+
+## 13. macOS fresh-machine setup: four small failures
+
+The first setup of both repos on a Mac (previous sessions were all
+Windows, §1-§2), done 2026-10-24. None are code bugs; all are the kind
+of thing that costs half an hour the first time.
+
+### 13.1 -- `claude: command not found` straight after a successful install
+
+**Symptom:** the Claude Code native installer printed "successfully
+installed" and then `claude --version` failed.
+**Root cause:** the installer puts the binary in `~/.local/bin`, which
+macOS's default zsh `PATH` doesn't include. The installer says so in a
+yellow "Setup notes" block that's easy to read past as a warning rather
+than a required step.
+**Fix:** `echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc &&
+source ~/.zshrc`.
+
+### 13.2 -- pip `resolution-too-deep` installing `apm_connectors`
+
+**Symptom:** `pip install -e ".[connectors,postgres,mcp]"` backtracked
+through dozens of `tenacity`/`uuid_utils` versions (pulled in via
+`langgraph` → `langchain-core`) and gave up with `error:
+resolution-too-deep`.
+**Root cause:** asking for all three extras at once (the `mcp>=2.0`
+extra in particular) widened the dependency graph past pip's
+backtracking limit on Python 3.12.
+**Fix:** upgrade pip, then install without the `mcp` extra (`pip
+install -e ".[connectors,postgres]"`), which resolved immediately: 168
+passed, 11 skipped. `uv pip install` is the fallback if it doesn't.
+**Takeaway:** install only the extras the task needs; add `mcp` later
+on its own, when the MCP server is actually being run.
+
+### 13.3 -- Two `.env` typos, each with a different misleading error
+
+**Symptom 1:** `No connection adapters were found for
+'JIRA_BASE_URL=https://...atlassian.net/rest/api/3/search/jql'`.
+**Root cause:** the line read `JIRA_BASE_URL=JIRA_BASE_URL=https://...`
+-- a whole example line pasted after the existing `=`.
+**Symptom 2 (after fixing 1):** `tool not configured on this server:
+jira`.
+**Root cause:** the key had become `JIRA_BASE_URLs` (a stray `s`), so
+the server saw no `JIRA_BASE_URL` at all; separately, `JIRA_EMAIL` had
+been truncated to 10 characters.
+**Fix / diagnosis that worked without exposing secrets:**
+`grep -n 'JIRA_' .env | grep -v '^[0-9]*:#' | awk -F= '{print $1,
+(length($2)>0 ? "-> SET ("length($2)" chars)" : "-> EMPTY")}'` -- prints
+each key name and value *length*, never the value, which made both the
+misspelt key and the too-short email obvious at a glance.
+**Takeaway:** "not configured" means *a required key is missing or
+misspelt*, not *a value is wrong*; check names and lengths before
+re-creating credentials. And `.env` is only read at startup -- restart
+uvicorn after every edit.
+
+### 13.4 -- A screenshot exposed the Salesforce consumer secret
+
+**Symptom:** a screenshot of `.env` open in TextEdit, shared for
+troubleshooting, showed `SALESFORCE_CLIENT_ID` and
+`SALESFORCE_CLIENT_SECRET` in full.
+**Fix:** rotate the consumer secret in Setup → External Client App
+Manager → APM Salesforce Connector → Settings → OAuth Settings, and
+update `.env`.
+**Takeaway:** share Terminal output or the key-name/length check from
+13.3 instead of the file itself; crop any screenshot of `.env` before
+sending it anywhere.
+
 ---
 
 ## Reference
