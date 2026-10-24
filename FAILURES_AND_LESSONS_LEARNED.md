@@ -788,7 +788,7 @@ whose whole point is "long past") as they are. Only test files change;
 the agent logic is correct as is. (An alternative is freezing the clock
 -- e.g. `freezegun` or monkeypatching a `today()` helper -- which keeps
 literal dates readable but adds a dependency.) Done in commit
-`c43ebb9` (branch `claude/relative-test-dates`), made with Claude Code
+`c43ebb9`, merged as [PR #21](https://github.com/ravindraaws77/APM_orchestrator_Enterprise_Systems/pull/21), made with Claude Code
 on the new Mac: the onboarding fixture's default `close_date` is now
 `date.today() - timedelta(days=3)`, and the account-matching tests use
 an `_upcoming()` helper (`date.today() + timedelta(days=10)`, inside the
