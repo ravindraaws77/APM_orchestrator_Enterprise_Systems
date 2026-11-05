@@ -65,6 +65,12 @@ See `apm_connectors/docs/security-guardrails.md`.
 ## What's not here yet
 
 - The avatar/voice/visual interface (Phase 2).
+- Intelligent document processing (PO intake for Order-Renewal,
+  onboarding-pack checks for Customer-Onboarding) and A2A
+  (a standalone document-extraction agent; third-party agents behind
+  the approval gate) — planned in `apm_connectors`' `docs/roadmap.md`,
+  Phase 6. Extraction is reasoning, so it is built here (or as an A2A
+  service next to this repo), never in `apm_connectors`.
 - Any specialized agent besides Order-Renewal (Churn Prevention,
   Customer Onboarding, ...) — add one the same way: a new
   `agents/<name>/` package with its own `policy.yaml` + `case_graph.py`
