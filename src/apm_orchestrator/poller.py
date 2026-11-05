@@ -56,6 +56,11 @@ async def _sweep_agent(agent: str, module, registry: CaseRegistry, checkpointer,
 
         if not snapshot.interrupts:
             continue  # finished already, or never actually paused
+        if snapshot.interrupts[0].value.get("type") != "awaiting_apm_connectors_approval":
+            # e.g. order_renewal's awaiting_po_field_review: a human
+            # reviewing extracted values, resumed by
+            # scripts/review_po_extraction.py -- nothing for the poller to check.
+            continue
 
         pending_action = snapshot.values.get("pending_action")
         action_id = snapshot.values.get("action_id")

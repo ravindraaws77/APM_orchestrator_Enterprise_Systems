@@ -122,3 +122,55 @@ reporting:
 record_update:
   fields_template:
     StageName: "Closed Won"
+
+# Purchase-order intake (roadmap Phase 6.1). Only runs for a case started
+# with a PO document (a Drive file id) -- a case without one skips this
+# whole section and behaves exactly as before. The document is read via
+# apm_connectors' /tools/drive/read and handed to the document-extraction
+# A2A agent (document_extraction/); everything below is this agent's
+# policy for what to do with the result, passed to that agent per request
+# where it applies (it has no business policy of its own).
+po_intake:
+  # Any extracted field below this confidence -- or a required field that
+  # wasn't found -- moves the A2A task to input-required and pauses this
+  # case for a human to review the values (scripts/review_po_extraction.py).
+  # Starting point, not a calibrated number: check it against
+  # evals/run_po_extraction_eval.py's per-bucket accuracy before trusting it.
+  min_field_confidence: 0.8
+  required_fields: [account_name, po_number, amount, term_start, term_end]
+
+  # Reconciliation against the Opportunity this case already selected
+  # (verify_account_node). Any failed check routes the PO to a Jira ticket
+  # for a human instead of updating Salesforce.
+  reconciliation:
+    # PO amount (pre-tax) vs Opportunity.Amount. Passes if within EITHER
+    # tolerance.
+    amount_tolerance_abs: 1.00
+    amount_tolerance_pct: 0.0
+    # PO term start vs Opportunity.CloseDate, in days either side. null
+    # skips the check.
+    term_start_max_days_from_close_date: 45
+    # ISO 4217 code every PO must be in, e.g. "USD". null skips the check
+    # -- which means a PO in a different currency with the same number
+    # would pass the amount check. Set it to your org's corporate
+    # currency (Setup -> Company Information) if it's single-currency.
+    expected_currency: null
+
+  # What a matching PO proposes on the Opportunity (extracted field ->
+  # Salesforce field API name), approval-gated like every write.
+  #
+  # SETUP: standard Opportunity has no PO-number field. Replace the
+  # placeholder with a real custom field from YOUR org (Setup -> Object
+  # Manager -> Opportunity -> Fields & Relationships, e.g.
+  # PO_Number__c) before using PO intake -- while it's still a
+  # REPLACE_WITH_ placeholder, a matching PO stops the case with a clear
+  # message instead of proposing a write that would 400 at approval time.
+  record_fields:
+    po_number: "REPLACE_WITH_OPPORTUNITY_PO_NUMBER_FIELD"
+
+  # Where a mismatched or rejected PO goes. project_key null means
+  # follow_up_routing.default_project_key above. "Task" is live-checked
+  # against this deployment's Jira (see blocking_issue_types' comment).
+  mismatch_ticket:
+    project_key: null
+    issue_type: "Task"

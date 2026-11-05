@@ -197,14 +197,20 @@ src/apm_orchestrator/
   agents/
     order_renewal/      pilot agent: policy.yaml + policy.py + agent.py
                          (Claude Agent SDK) + case_graph.py (LangGraph)
+                         + po_reconciliation.py (PO vs Opportunity)
+  document_extraction/  standalone A2A agent (roadmap 6.3): schema.py,
+                         extractor.py (Claude Messages API), server.py
+                         (A2A server), client.py (what case graphs call)
   evals/                golden-dataset evals against the real Claude API
-                         (routing_cases.py + run_supervisor_routing_eval.py) --
+                         (routing_cases.py + run_supervisor_routing_eval.py;
+                         po_extraction_cases.py + run_po_extraction_eval.py) --
                          distinct from tests/: judged by pass-rate over a
                          versioned dataset, not assert-equal-on-one-input
   cli.py               manual single-prompt smoke test (Supervisor)
 scripts/
   run_case.py          manually start one durable case
   show_case.py         print one case's current/final checkpoint state
+  review_po_extraction.py  human review of extracted PO values for a paused case
   show_low_confidence_routings.py  review routings the Supervisor flagged as a close call
   run_calibration_batch.py seed SupervisorRoutingLog with varied prompts (not from evals/) for review
   review_routing_log.py    sample both confidence buckets, record a human's correct/incorrect verdict

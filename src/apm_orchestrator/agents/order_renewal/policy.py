@@ -79,6 +79,32 @@ class OrderRenewalPolicy:
     def record_update_fields(self) -> dict[str, Any]:
         return dict(self.raw["record_update"]["fields_template"])
 
+    # -- PO intake (Phase 6.1) -------------------------------------------
+
+    @property
+    def po_min_field_confidence(self) -> float:
+        return float(self.raw["po_intake"]["min_field_confidence"])
+
+    @property
+    def po_required_fields(self) -> list[str]:
+        return list(self.raw["po_intake"]["required_fields"])
+
+    @property
+    def po_reconciliation(self) -> dict[str, Any]:
+        return dict(self.raw["po_intake"]["reconciliation"])
+
+    @property
+    def po_record_fields(self) -> dict[str, str]:
+        return dict(self.raw["po_intake"]["record_fields"])
+
+    @property
+    def po_mismatch_project_key(self) -> str:
+        return self.raw["po_intake"]["mismatch_ticket"].get("project_key") or self.route_for(None)
+
+    @property
+    def po_mismatch_issue_type(self) -> str:
+        return self.raw["po_intake"]["mismatch_ticket"]["issue_type"]
+
 
 def load_policy(path: str | Path | None = None) -> OrderRenewalPolicy:
     policy_path = Path(path) if path else _DEFAULT_POLICY_PATH

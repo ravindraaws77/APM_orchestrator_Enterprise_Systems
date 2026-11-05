@@ -16,6 +16,11 @@ _DEFAULT_SUPERVISOR_MODEL = "claude-sonnet-5"
 _DEFAULT_BUSINESS_AGENT_MODEL = "claude-sonnet-5"
 _DEFAULT_SUPERVISOR_MAX_BUDGET_USD = 0.50
 _DEFAULT_BUSINESS_AGENT_MAX_BUDGET_USD = 2.00
+_DEFAULT_DOCUMENT_EXTRACTION_URL = "http://127.0.0.1:8100"
+_DEFAULT_DOCUMENT_EXTRACTION_MODEL = "claude-opus-5-5"
+_DEFAULT_DOCUMENT_EXTRACTION_EFFORT = "high"
+_DEFAULT_DOCUMENT_EXTRACTION_MAX_TOKENS = 16000
+_DEFAULT_DOCUMENT_EXTRACTION_MAX_BYTES = 10 * 1024 * 1024
 
 
 @dataclass(frozen=True)
@@ -29,11 +34,27 @@ class Settings:
     business_agent_model: str = _DEFAULT_BUSINESS_AGENT_MODEL
     supervisor_max_budget_usd: float = _DEFAULT_SUPERVISOR_MAX_BUDGET_USD
     business_agent_max_budget_usd: float = _DEFAULT_BUSINESS_AGENT_MAX_BUDGET_USD
+    # Document-extraction A2A agent (document_extraction/). The URL/key
+    # are what a *caller* (a business agent's case graph) uses to reach
+    # it; the server-side keys and model settings are what the agent
+    # itself runs with.
+    document_extraction_url: str = _DEFAULT_DOCUMENT_EXTRACTION_URL
+    document_extraction_api_key: str | None = None
+    document_extraction_server_api_keys: tuple[str, ...] = ()
+    document_extraction_model: str = _DEFAULT_DOCUMENT_EXTRACTION_MODEL
+    document_extraction_effort: str = _DEFAULT_DOCUMENT_EXTRACTION_EFFORT
+    document_extraction_max_tokens: int = _DEFAULT_DOCUMENT_EXTRACTION_MAX_TOKENS
+    document_extraction_max_bytes: int = _DEFAULT_DOCUMENT_EXTRACTION_MAX_BYTES
 
 
 def _float_env(name: str, default: float) -> float:
     raw = os.environ.get(name)
     return float(raw) if raw else default
+
+
+def _int_env(name: str, default: int) -> int:
+    raw = os.environ.get(name)
+    return int(raw) if raw else default
 
 
 def load_settings() -> Settings:
@@ -67,5 +88,32 @@ def load_settings() -> Settings:
         supervisor_max_budget_usd=_float_env("SUPERVISOR_MAX_BUDGET_USD", _DEFAULT_SUPERVISOR_MAX_BUDGET_USD),
         business_agent_max_budget_usd=_float_env(
             "BUSINESS_AGENT_MAX_BUDGET_USD", _DEFAULT_BUSINESS_AGENT_MAX_BUDGET_USD
+        ),
+        document_extraction_url=os.environ.get(
+            "DOCUMENT_EXTRACTION_URL", _DEFAULT_DOCUMENT_EXTRACTION_URL
+        ).rstrip("/"),
+        document_extraction_api_key=os.environ.get("DOCUMENT_EXTRACTION_API_KEY") or None,
+        document_extraction_server_api_keys=tuple(
+            key.strip()
+            for key in os.environ.get("DOCUMENT_EXTRACTION_SERVER_API_KEYS", "").split(",")
+            if key.strip()
+        ),
+        # Pinned explicitly for the same reason as the models above. This
+        # call site is a direct Messages API call (not ClaudeAgentOptions),
+        # so its cost backstops are max_tokens plus the document size cap
+        # below rather than max_budget_usd -- one bounded request per
+        # document, no agent loop to run away. Validate a model or effort
+        # change against evals/run_po_extraction_eval.py first.
+        document_extraction_model=os.environ.get(
+            "DOCUMENT_EXTRACTION_MODEL", _DEFAULT_DOCUMENT_EXTRACTION_MODEL
+        ),
+        document_extraction_effort=os.environ.get(
+            "DOCUMENT_EXTRACTION_EFFORT", _DEFAULT_DOCUMENT_EXTRACTION_EFFORT
+        ),
+        document_extraction_max_tokens=_int_env(
+            "DOCUMENT_EXTRACTION_MAX_TOKENS", _DEFAULT_DOCUMENT_EXTRACTION_MAX_TOKENS
+        ),
+        document_extraction_max_bytes=_int_env(
+            "DOCUMENT_EXTRACTION_MAX_BYTES", _DEFAULT_DOCUMENT_EXTRACTION_MAX_BYTES
         ),
     )

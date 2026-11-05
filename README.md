@@ -52,6 +52,31 @@ of.
   single write behind its own in-process approval `interrupt()` — see
   that module's docstring for how the two relate (they never share a
   checkpointer).
+- **Document-extraction agent** (`src/apm_orchestrator/document_extraction/`,
+  roadmap Phase 6.3) — intelligent document processing as its own
+  **A2A** agent, built on the official `a2a-sdk`. Publishes an Agent
+  Card (`/.well-known/agent-card.json`) with one skill,
+  `extract_purchase_order`, and returns account, PO number, pre-tax
+  amount, currency, term dates and signatory — each with a 0–1
+  confidence and a verbatim evidence snippet — as an A2A task artifact.
+  A low-confidence or missing required field moves the task to
+  `input-required`: a human-review checkpoint on the *values* (not the
+  write approval, which stays in `apm_connectors`). It holds no
+  connector credentials — the caller fetches the document through
+  `apm_connectors` and passes the bytes — and treats every document as
+  untrusted, flagging text aimed at automated systems instead of
+  following it. Run it with `apm-document-extraction-agent`.
+- **PO intake for Order-Renewal** (roadmap Phase 6.1) — start a renewal
+  case with `--po-file-id <drive-file-id>` and the case graph reads the
+  PO from Drive, sends it to the extraction agent over A2A, pauses for
+  human review when the agent asks for it
+  (`scripts/review_po_extraction.py`), then reconciles the PO against
+  the Opportunity (`po_reconciliation.py`: normalized account name,
+  amount tolerance, term start vs close date, optional currency). A
+  match proposes the PO number onto the Opportunity before the renewal
+  call; a mismatch proposes a Jira ticket and ends the case. Both are
+  ordinary approval-gated writes. Tolerances, the confidence threshold
+  and required fields live in `policy.yaml`'s `po_intake`.
 - **Poller** (`poller.py`) — a standalone process that resumes an
   in-flight case once its `apm_connectors` pending action resolves.
   Decoupled from everything else on purpose: run it once (`--once`, for
@@ -65,12 +90,16 @@ See `apm_connectors/docs/security-guardrails.md`.
 ## What's not here yet
 
 - The avatar/voice/visual interface (Phase 2).
-- Intelligent document processing (PO intake for Order-Renewal,
-  onboarding-pack checks for Customer-Onboarding) and A2A
-  (a standalone document-extraction agent; third-party agents behind
-  the approval gate) — planned in `apm_connectors`' `docs/roadmap.md`,
-  Phase 6. Extraction is reasoning, so it is built here (or as an A2A
-  service next to this repo), never in `apm_connectors`.
+- The rest of roadmap Phase 6 (`apm_connectors`' `docs/roadmap.md`):
+  onboarding-pack checks for Customer-Onboarding (6.2, a second skill on
+  the same extraction agent), third-party A2A agents behind the approval
+  gate (6.4), and the read-only Gmail attachment route in
+  `apm_connectors` for the email-in PO path. PO intake reads from Drive
+  only today.
+- Durable A2A task storage. The extraction agent keeps tasks (including
+  the submitted document) in memory for the life of its process; a
+  durable store with a retention policy comes before any real customer
+  documents flow through it (roadmap Phase 4's PII/retention item).
 - Any specialized agent besides Order-Renewal (Churn Prevention,
   Customer Onboarding, ...) — add one the same way: a new
   `agents/<name>/` package with its own `policy.yaml` + `case_graph.py`
@@ -147,6 +176,44 @@ python scripts/run_case.py acme-2026-09-15 "Acme Corp"   # starts (or resumes-fr
 
 apm-orchestrator-poller --once     # or --loop --interval 60 for a long-lived process
 ```
+
+### Purchase-order intake (roadmap 6.1 + 6.3)
+
+```bash
+pip install -e ".[postgres,document-agent]"
+
+# 1. Run the document-extraction A2A agent (needs ANTHROPIC_API_KEY).
+apm-document-extraction-agent --port 8100
+curl -s http://127.0.0.1:8100/.well-known/agent-card.json   # its Agent Card
+
+# 2. Set po_intake.record_fields in agents/order_renewal/policy.yaml to a
+#    real Opportunity field in your org (it ships as a REPLACE_WITH_
+#    placeholder, and a matching PO stops the case until it's set).
+
+# 3. Start a renewal case with a PO that's in the apm_connectors Drive folder.
+python scripts/run_case.py --po-file-id <drive-file-id> acme-po-2026-11-05 "Acme Corp"
+
+# 4. If the case paused for review: inspect, then accept (with
+#    corrections) or reject.
+python scripts/review_po_extraction.py acme-po-2026-11-05
+python scripts/review_po_extraction.py acme-po-2026-11-05 --reviewer you@example.com --accept --set po_number=PO-004512
+
+# 5. Approve/reject the resulting Salesforce update or Jira ticket in
+#    apm_connectors as usual, then let the poller resume the case.
+apm-orchestrator-poller --once
+```
+
+Extraction quality is measured against a versioned golden set of
+synthetic POs (`evals/po_extraction_cases.py`: clean, format,
+missing-field, ambiguous and prompt-injection cases), scored per field
+with a calibration check — are values at or above the review threshold
+actually more accurate than those below it:
+
+```bash
+python -m apm_orchestrator.evals.run_po_extraction_eval --output po-eval.json
+```
+
+It runs nightly alongside the routing eval (`.github/workflows/eval.yml`).
 
 ### Reviewing ambiguous Supervisor routings (Postgres required)
 

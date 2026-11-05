@@ -24,6 +24,19 @@ here (found by whatever starts the case -- a Supervisor classification
 turn, a manual trigger) rather than extracted by a node, so every node
 in this graph stays a plain, fast, unit-testable apm_connectors call.
 
+Purchase-order intake (roadmap Phase 6.1 + 6.3) is an optional branch,
+taken only when a case starts with `po_file_id` (a Drive file id):
+`extract_po` reads the document through apm_connectors and sends it to
+the document-extraction A2A agent (`document_extraction/`) -- the one
+node here that calls something other than apm_connectors, and it calls
+an agent, not an LLM. A low-confidence extraction pauses the case at
+`wait_for_po_review` (a human checks the *values*; not the write
+approval gate). `reconcile_po` then compares the PO with the
+Opportunity using `po_reconciliation.py`: a match proposes the PO
+fields onto the Opportunity before the renewal call; a mismatch
+proposes a Jira ticket and ends the case. Both are ordinary
+approval-gated writes.
+
 Usage (see scripts/run_case.py):
 
     async with AsyncPostgresSaver.from_conn_string(database_url) as checkpointer:
@@ -36,6 +49,7 @@ Usage (see scripts/run_case.py):
 
 from __future__ import annotations
 
+import base64
 import logging
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
@@ -44,8 +58,11 @@ from typing import Any, TypedDict
 from langgraph.graph import END, StateGraph
 from langgraph.types import Command, interrupt
 
+from apm_orchestrator.agents.order_renewal.po_reconciliation import normalize_account_name, reconcile
 from apm_orchestrator.agents.order_renewal.policy import load_policy
 from apm_orchestrator.connectors_client import ConnectorError
+from apm_orchestrator.document_extraction.client import get_extraction_client
+from apm_orchestrator.document_extraction.schema import parse_extraction
 from apm_orchestrator.db import CaseRegistry
 from apm_orchestrator.tools import get_client
 
@@ -66,7 +83,14 @@ class CaseState(TypedDict, total=False):
     contract_doc: dict[str, Any] | None
     call_start: str | None
 
-    awaiting_step: str | None  # "call" | "notice" | "record_update"
+    # PO intake (optional -- only when the case starts with po_file_id)
+    po_file_id: str | None
+    po_document: dict[str, Any] | None  # {file_id, name, mime_type}
+    po_task: dict[str, Any] | None  # ExtractionTaskResult.to_state()
+    po_review_decision: dict[str, Any] | None
+    po_reconciliation: dict[str, Any] | None
+
+    awaiting_step: str | None  # "po_update" | "po_mismatch" | "call" | "notice" | "record_update"
     action_id: str | None  # the id to poll/decide -- RunOutcomeResponse.action_id,
     # NOT pending_action["action_id"] (a different, internal state-store id --
     # see propose node comments below)
@@ -91,6 +115,10 @@ class CaseOutcome:
     step: str | None
     final_summary: str | None
     done: bool
+    # Set only while paused for a human to review extracted PO values
+    # (step == "po_review"): the A2A task id, the extraction and why it
+    # needs review.
+    review: dict[str, Any] | None = None
 
 
 def _config(case_id: str) -> dict[str, Any]:
@@ -104,13 +132,8 @@ def _escape_soql_literal(value: str) -> str:
     return value.replace("\\", "\\\\").replace("'", "\\'")
 
 
-def _normalize_account_name(name: str) -> str:
-    """Collapses the punctuation/whitespace/case differences a real
-    account name and an inbound email's version of it commonly disagree
-    on (a trailing period, extra whitespace, case) -- deliberately not
-    fuzzy beyond that: two *different* accounts (a UK/Singapore
-    subsidiary) should still normalize to different strings."""
-    return " ".join(name.split()).rstrip(".").casefold()
+# One definition, shared with PO reconciliation (po_reconciliation.py).
+_normalize_account_name = normalize_account_name
 
 
 def _find_stale_open_opportunities(records: list[dict[str, Any]]) -> list[str]:
@@ -316,6 +339,167 @@ async def pull_contract_node(state: CaseState) -> dict[str, Any]:
     return {"contract_doc": files[0], "steps_completed": steps + ["pull_contract"]}
 
 
+@_guarded("extract_po")
+async def extract_po_node(state: CaseState) -> dict[str, Any]:
+    client = get_client()
+    policy = load_policy()
+    steps = state.get("steps_completed", [])
+
+    doc = await client.drive_read_file(file_id=state["po_file_id"], process_id=state.get("case_id"))
+    document = base64.b64decode(doc.get("content_base64") or "")
+    result = await get_extraction_client().extract_purchase_order(
+        document,
+        media_type=doc.get("mime_type") or "application/octet-stream",
+        filename=doc.get("name"),
+        min_field_confidence=policy.po_min_field_confidence,
+        required_fields=policy.po_required_fields,
+    )
+    update: dict[str, Any] = {
+        "po_document": {"file_id": state["po_file_id"], "name": doc.get("name"), "mime_type": doc.get("mime_type")},
+        "po_task": result.to_state(),
+    }
+    if result.state in ("failed", "rejected"):
+        return {
+            **update,
+            "stop_reason": f"PO extraction {result.state} for {doc.get('name')!r}: {result.message}",
+            "steps_completed": steps + [f"extract_po:{result.state}"],
+        }
+    suffix = ":needs_review" if result.state == "input_required" else ""
+    return {**update, "steps_completed": steps + [f"extract_po{suffix}"]}
+
+
+def wait_for_po_review_node(state: CaseState) -> dict[str, Any]:
+    """Pauses this case until a human reviews the extracted PO values
+    (scripts/review_po_extraction.py -> resume_po_review). Distinct from
+    wait_for_approval: nothing is pending in apm_connectors here, so the
+    poller leaves this interrupt alone."""
+    decision = interrupt(
+        {
+            "type": "awaiting_po_field_review",
+            "case_id": state["case_id"],
+            "step": "po_review",
+            "action_id": None,
+            "pending_action": None,
+            "review": state["po_task"],
+        }
+    )
+    return {"po_review_decision": decision}
+
+
+async def submit_po_review_node(state: CaseState) -> dict[str, Any]:
+    steps = state.get("steps_completed", [])
+    task = state["po_task"]
+    decision = state["po_review_decision"] or {}
+    result = await get_extraction_client().submit_review(
+        task_id=task["task_id"],
+        context_id=task["context_id"],
+        reviewer=decision.get("reviewer") or "",
+        decision=decision.get("decision") or "",
+        reviewed_fields=decision.get("reviewed_fields"),
+        reason=decision.get("reason"),
+    )
+    update: dict[str, Any] = {"po_task": result.to_state(), "po_review_decision": None}
+    if result.state == "failed":
+        return {
+            **update,
+            "stop_reason": f"PO review could not be applied: {result.message}",
+            "steps_completed": steps + ["po_review:failed"],
+        }
+    # input_required again means the review itself was invalid (unknown
+    # field, malformed value) -- the case goes back to waiting on a human.
+    label = {"completed": "po_review", "rejected": "po_review:rejected"}.get(result.state, "po_review:invalid")
+    return {**update, "steps_completed": steps + [label]}
+
+
+def reconcile_po_node(state: CaseState) -> dict[str, Any]:
+    policy = load_policy()
+    steps = state.get("steps_completed", [])
+    extraction = parse_extraction(state["po_task"]["extraction"])
+    result = reconcile(
+        extraction,
+        state["opportunity"],
+        state["account_name"],
+        policy.po_reconciliation,
+        policy.po_required_fields,
+    )
+    label = "reconcile_po:matched" if result.matched else "reconcile_po:mismatch"
+    return {"po_reconciliation": result.to_state(), "steps_completed": steps + [label]}
+
+
+@_guarded("propose_po_update")
+async def propose_po_update_node(state: CaseState) -> dict[str, Any]:
+    client = get_client()
+    policy = load_policy()
+    steps = state.get("steps_completed", [])
+
+    mapping = policy.po_record_fields
+    placeholders = sorted(sf for sf in mapping.values() if sf.startswith("REPLACE_WITH_"))
+    if placeholders:
+        return {
+            "stop_reason": (
+                "PO reconciled, but policy.yaml's po_intake.record_fields still has placeholder "
+                f"Salesforce field(s) {placeholders} -- set real Opportunity field API names "
+                "before PO intake can propose an update."
+            ),
+            "steps_completed": steps + ["propose_po_update:unconfigured"],
+        }
+
+    extraction = parse_extraction(state["po_task"]["extraction"])
+    fields = {sf: extraction.value(name) for name, sf in mapping.items() if extraction.value(name) is not None}
+    result = await client.salesforce_update_record(
+        object_name="Opportunity",
+        record_id=state["opportunity"]["record_id"],
+        fields=fields,
+        process_id=state.get("case_id"),
+    )
+    return {
+        "action_id": result["action_id"],
+        "pending_action": result["pending_action"],
+        "awaiting_step": "po_update",
+        "steps_completed": steps + ["propose_po_update"],
+    }
+
+
+@_guarded("propose_po_mismatch_ticket")
+async def propose_po_mismatch_ticket_node(state: CaseState) -> dict[str, Any]:
+    client = get_client()
+    policy = load_policy()
+    steps = state.get("steps_completed", [])
+    task = state["po_task"]
+    doc = state.get("po_document") or {}
+    extraction = task.get("extraction") or {}
+    po_number = ((extraction.get("fields") or {}).get("po_number") or {}).get("value")
+
+    if task["state"] == "rejected":
+        problems = [f"Rejected in human review: {task.get('message')}"]
+    else:
+        problems = (state.get("po_reconciliation") or {}).get("failures", [])
+    lines = [
+        f"A purchase order for {state['account_name']} did not reconcile with Opportunity "
+        f"{state['opportunity']['record_id']} and needs a human to resolve it.",
+        f"Document: {doc.get('name')} (Drive file {doc.get('file_id')})",
+        f"A2A extraction task: {task.get('task_id')}",
+        "",
+        "Problems:",
+        *[f"- {p}" for p in problems],
+    ]
+    result = await client.jira_create_issue(
+        fields={
+            "project": {"key": policy.po_mismatch_project_key},
+            "summary": f"PO mismatch: {state['account_name']} ({po_number or 'no PO number'})",
+            "issuetype": {"name": policy.po_mismatch_issue_type},
+            "description": "\n".join(lines),
+        },
+        process_id=state.get("case_id"),
+    )
+    return {
+        "action_id": result["action_id"],
+        "pending_action": result["pending_action"],
+        "awaiting_step": "po_mismatch",
+        "steps_completed": steps + ["propose_po_mismatch_ticket"],
+    }
+
+
 @_guarded("propose_call")
 async def propose_call_node(state: CaseState) -> dict[str, Any]:
     client = get_client()
@@ -412,8 +596,15 @@ def record_outcome_node(state: CaseState) -> dict[str, Any]:
         summary = state["stop_reason"]
     elif not (state.get("last_action_result") or {}).get("approved", True):
         summary = f"Stopped: the {state.get('awaiting_step')} step was rejected."
+    elif state.get("awaiting_step") == "po_mismatch":
+        summary = (
+            f"PO for {state['account_name']} did not reconcile with the Opportunity -- routed to "
+            "Jira; renewal paused until a human resolves it."
+        )
     else:
         summary = f"Renewal workflow completed for {state['account_name']}."
+        if (state.get("po_reconciliation") or {}).get("matched"):
+            summary += " Purchase order reconciled and recorded on the Opportunity."
 
     stale = state.get("stale_opportunities")
     if stale:
@@ -432,11 +623,31 @@ def _route_after_check(state: CaseState) -> str:
     return "record_outcome" if state.get("stop_reason") else "_continue"
 
 
+def _route_after_contract(state: CaseState) -> str:
+    return "extract_po" if state.get("po_file_id") else "propose_call"
+
+
+def _route_after_po_task(state: CaseState) -> str:
+    if state.get("stop_reason"):
+        return "record_outcome"
+    return {
+        "input_required": "wait_for_po_review",
+        "completed": "reconcile_po",
+        "rejected": "propose_po_mismatch_ticket",
+    }.get(state["po_task"]["state"], "record_outcome")
+
+
+def _route_after_reconcile(state: CaseState) -> str:
+    return "propose_po_update" if state["po_reconciliation"]["matched"] else "propose_po_mismatch_ticket"
+
+
 def _route_after_wait(state: CaseState) -> str:
     approved = bool((state.get("last_action_result") or {}).get("approved"))
     step = state.get("awaiting_step")
     if not approved:
         return "record_outcome"
+    if step == "po_update":
+        return "propose_call"
     if step == "call":
         return "propose_notice"
     if step == "notice":
@@ -450,6 +661,12 @@ def build_case_graph(checkpointer: Any):
     graph.add_node("verify_account", verify_account_node)
     graph.add_node("check_blockers", check_blockers_node)
     graph.add_node("pull_contract", pull_contract_node)
+    graph.add_node("extract_po", extract_po_node)
+    graph.add_node("wait_for_po_review", wait_for_po_review_node)
+    graph.add_node("submit_po_review", submit_po_review_node)
+    graph.add_node("reconcile_po", reconcile_po_node)
+    graph.add_node("propose_po_update", propose_po_update_node)
+    graph.add_node("propose_po_mismatch_ticket", propose_po_mismatch_ticket_node)
     graph.add_node("propose_call", propose_call_node)
     graph.add_node("wait_for_approval", wait_for_approval_node)
     graph.add_node("propose_notice", propose_notice_node)
@@ -470,7 +687,27 @@ def build_case_graph(checkpointer: Any):
         _route_after_check,
         {"_continue": "pull_contract", "record_outcome": "record_outcome"},
     )
-    graph.add_edge("pull_contract", "propose_call")
+    graph.add_conditional_edges(
+        "pull_contract", _route_after_contract, {"extract_po": "extract_po", "propose_call": "propose_call"}
+    )
+    po_task_routes = {
+        "wait_for_po_review": "wait_for_po_review",
+        "reconcile_po": "reconcile_po",
+        "propose_po_mismatch_ticket": "propose_po_mismatch_ticket",
+        "record_outcome": "record_outcome",
+    }
+    graph.add_conditional_edges("extract_po", _route_after_po_task, po_task_routes)
+    graph.add_edge("wait_for_po_review", "submit_po_review")
+    graph.add_conditional_edges("submit_po_review", _route_after_po_task, po_task_routes)
+    graph.add_conditional_edges(
+        "reconcile_po",
+        _route_after_reconcile,
+        {"propose_po_update": "propose_po_update", "propose_po_mismatch_ticket": "propose_po_mismatch_ticket"},
+    )
+    for node in ("propose_po_update", "propose_po_mismatch_ticket"):
+        graph.add_conditional_edges(
+            node, _route_after_check, {"_continue": "wait_for_approval", "record_outcome": "record_outcome"}
+        )
     graph.add_conditional_edges(
         "propose_call",
         _route_after_check,
@@ -480,6 +717,7 @@ def build_case_graph(checkpointer: Any):
         "wait_for_approval",
         _route_after_wait,
         {
+            "propose_call": "propose_call",
             "propose_notice": "propose_notice",
             "propose_record_update": "propose_record_update",
             "record_outcome": "record_outcome",
@@ -508,11 +746,12 @@ def _to_outcome(case_id: str, result: dict[str, Any]) -> CaseOutcome:
         payload = result["__interrupt__"][0].value
         return CaseOutcome(
             case_id=case_id,
-            action_id=payload["action_id"],
-            pending_action=payload["pending_action"],
+            action_id=payload.get("action_id"),
+            pending_action=payload.get("pending_action"),
             step=payload["step"],
             final_summary=None,
             done=False,
+            review=payload.get("review"),
         )
     return CaseOutcome(
         case_id=case_id,
@@ -530,6 +769,7 @@ async def start_case(
     case_id: str,
     account_name: str,
     raw_request: str = "",
+    po_file_id: str | None = None,
 ) -> CaseOutcome:
     # Re-invoking a case_id that already reached record_outcome
     # (done=True) is a real, live-verified failure mode on Windows:
@@ -556,6 +796,7 @@ async def start_case(
         "case_id": case_id,
         "account_name": account_name,
         "raw_request": raw_request,
+        "po_file_id": po_file_id,
         "steps_completed": [],
     }
     result = await graph.ainvoke(initial, config=_config(case_id))
@@ -567,6 +808,39 @@ async def resume_case(
 ) -> CaseOutcome:
     result = await graph.ainvoke(
         Command(resume={"approved": approved, "final_result": final_result}),
+        config=_config(case_id),
+    )
+    return _to_outcome(case_id, result)
+
+
+async def resume_po_review(
+    graph: Any,
+    case_id: str,
+    reviewer: str,
+    decision: str,
+    reviewed_fields: dict[str, Any] | None = None,
+    reason: str | None = None,
+) -> CaseOutcome:
+    """Resume a case paused at wait_for_po_review with a human's review of
+    the extracted PO values: decision "accept" (optionally with corrected
+    `reviewed_fields`) or "reject". Refuses to resume a case that isn't
+    actually waiting on a PO review, so this can never be used to push a
+    case past an apm_connectors approval."""
+    snapshot = await graph.aget_state(_config(case_id))
+    payloads = [i.value for i in snapshot.interrupts]
+    if not payloads or payloads[0].get("type") != "awaiting_po_field_review":
+        raise ValueError(f"Case {case_id!r} is not waiting on a PO review.")
+    if decision not in ("accept", "reject"):
+        raise ValueError('decision must be "accept" or "reject"')
+    result = await graph.ainvoke(
+        Command(
+            resume={
+                "reviewer": reviewer,
+                "decision": decision,
+                "reviewed_fields": dict(reviewed_fields or {}),
+                "reason": reason,
+            }
+        ),
         config=_config(case_id),
     )
     return _to_outcome(case_id, result)
