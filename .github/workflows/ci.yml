@@ -16,8 +16,8 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Install package + dev/postgres/strands/rag/a2a extras
-        run: pip install -e ".[dev,postgres,strands,rag,a2a]" ruff
+      - name: Install package + dev/postgres/strands/rag/a2a/document-agent extras
+        run: pip install -e ".[dev,postgres,strands,rag,a2a,document-agent]" ruff
 
       # Restricted to real bugs (syntax errors, undefined names, unused
       # imports) rather than full style enforcement, since this repo has

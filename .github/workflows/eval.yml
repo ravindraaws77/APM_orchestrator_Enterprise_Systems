@@ -1,4 +1,4 @@
-name: Live evals (Supervisor routing, grounded RAG)
+name: Live evals (Supervisor routing, grounded RAG, PO extraction)
 
 # Runs the live golden-dataset eval (src/apm_orchestrator/evals/) against
 # the real Claude API. Separate from ci.yml on purpose: this makes ~20
@@ -65,5 +65,28 @@ jobs:
         with:
           name: rag-eval-results
           path: rag-eval-results.json
+          if-no-files-found: ignore
+          retention-days: 90
+
+      # PO extraction golden set (evals/po_extraction_cases.py): one
+      # Messages API call per case (8 today). Runs even if an eval above
+      # failed, so one regression never hides another.
+      - name: Run PO extraction eval
+        if: success() || failure()
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          if [ -z "$ANTHROPIC_API_KEY" ]; then
+            echo "::warning::ANTHROPIC_API_KEY secret not set -- skipping live PO extraction eval."
+            exit 0
+          fi
+          python -m apm_orchestrator.evals.run_po_extraction_eval --output po-extraction-eval-results.json
+
+      - name: Upload PO extraction eval results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: po-extraction-eval-results
+          path: po-extraction-eval-results.json
           if-no-files-found: ignore
           retention-days: 90
