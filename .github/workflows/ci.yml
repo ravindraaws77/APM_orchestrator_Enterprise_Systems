@@ -16,8 +16,8 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Install package + dev/postgres extras
-        run: pip install -e ".[dev,postgres]" ruff
+      - name: Install package + dev/postgres/strands extras
+        run: pip install -e ".[dev,postgres,strands]" ruff
 
       # Restricted to real bugs (syntax errors, undefined names, unused
       # imports) rather than full style enforcement, since this repo has

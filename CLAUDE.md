@@ -197,6 +197,9 @@ src/apm_orchestrator/
   agents/
     order_renewal/      pilot agent: policy.yaml + policy.py + agent.py
                          (Claude Agent SDK) + case_graph.py (LangGraph)
+  strands_spike/        framework spike: renewal triage on Strands Agents
+                         (toolbelt + guardrail hooks + typed report), not
+                         a registered agent -- see README.md
   evals/                golden-dataset evals against the real Claude API
                          (routing_cases.py + run_supervisor_routing_eval.py) --
                          distinct from tests/: judged by pass-rate over a
@@ -210,6 +213,7 @@ scripts/
   review_routing_log.py    sample both confidence buckets, record a human's correct/incorrect verdict
   calibration_report.py    the actual calibration check: wrong-rate per confidence bucket, from reviewed rows
   test_supervisor_routing.py  thin CLI shim over evals/run_supervisor_routing_eval.py
+  run_strands_triage.py  run the Strands triage spike once, live
   e2e_smoke.py          real-server smoke test, no mocks
 tests/                 unit tests (mocked client, no infra) plus
                         test_case_graph_mechanics.py (real Postgres +

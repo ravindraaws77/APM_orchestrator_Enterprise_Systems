@@ -215,6 +215,42 @@ real finding, not a bug to hide — it means `SYSTEM_PROMPT`'s calibration
 guidance needs revisiting before the flagged-for-review queue can be
 trusted.
 
+## Strands Agents spike
+
+`src/apm_orchestrator/strands_spike/` runs one bounded job on AWS's open-source
+[Strands Agents](https://strandsagents.com) SDK instead of the Claude Agent SDK,
+so the two frameworks can be compared on the same connectors, policy and
+guardrails. It's a framework evaluation, not a registered business agent: the
+Supervisor does not delegate to it.
+
+**The job:** renewal-readiness triage for one account. The agent finds the
+Salesforce Opportunity relevant to a renewal, checks Jira for blocking tickets,
+proposes at most one follow-up ticket (a paused action a human must approve),
+and returns a typed `RenewalTriageReport` (pydantic) through Strands' structured
+output.
+
+```
+pip install -e ".[dev,postgres,strands]"
+pytest -q tests/test_strands_triage.py          # full Strands loop, scripted fake model, no network
+python scripts/run_strands_triage.py "Acme Corp"  # live: real Claude API + real apm_connectors server
+```
+
+How the repo's rules carry over:
+
+| Concern | Claude Agent SDK agents | Strands spike |
+|---|---|---|
+| Model | `ClaudeAgentOptions(model=...)` from `load_settings()` | `AnthropicModel(model_id=settings.business_agent_model, max_tokens=4096)` |
+| Toolbelt | `allowed_tools` over the shared MCP server | Four task-level `@tool`s (`toolbelt.py`), plus a hook that refuses any other tool name |
+| Budget | `max_budget_usd`, `max_turns` | Hook-enforced caps on model calls, tool calls, proposals and total tokens (`guardrails.py`, `STRANDS_MAX_*` env vars) |
+| Output | Free text | Typed `RenewalTriageReport` |
+| Approval | No tool wraps the decision route | Same, and the guard refuses `decide_action` by name (tested) |
+
+Design choice: the tools are task-level, not one per `/tools/*` route. The model
+never writes SOQL or JQL; the tools run the Order-Renewal `policy.yaml`
+templates and reuse the case graph's live-verified helpers (normalized
+account matching, closest-to-today Opportunity, symmetric renewal window). The
+model only decides what to call and how to summarise it.
+
 ## Tests
 
 ```bash

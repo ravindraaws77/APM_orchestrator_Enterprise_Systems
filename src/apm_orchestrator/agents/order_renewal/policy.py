@@ -68,6 +68,11 @@ class OrderRenewalPolicy:
         return routing["default_project_key"]
 
     @property
+    def follow_up_issue_type(self) -> str:
+        """Jira work type used when proposing a follow-up ticket."""
+        return self.raw["follow_up_routing"]["issue_type"]
+
+    @property
     def reporting_sheet(self) -> str:
         return self.raw["reporting"]["workbook_sheet"]
 

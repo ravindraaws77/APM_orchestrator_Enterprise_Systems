@@ -100,6 +100,12 @@ blocking_tickets:
 # routes partner-ops/enterprise-success work to separate projects.
 follow_up_routing:
   default_project_key: "KAN"
+  # Jira work type for a proposed follow-up ticket. "Task" is one of the
+  # four work types live-checked on this deployment's real Jira site
+  # (Epic/Story/Task/Subtask -- see blocking_issue_types above). Check
+  # your own site's real list before changing it: a made-up type 400s
+  # only once an approved proposal finally executes.
+  issue_type: "Task"
   # Maps a detected keyword/account attribute to a specific Jira
   # project/component -- extend per real team/partner as they're onboarded.
   routes:
