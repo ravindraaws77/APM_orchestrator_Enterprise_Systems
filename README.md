@@ -71,6 +71,11 @@ See `apm_connectors/docs/security-guardrails.md`.
   the approval gate) — planned in `apm_connectors`' `docs/roadmap.md`,
   Phase 6. Extraction is reasoning, so it is built here (or as an A2A
   service next to this repo), never in `apm_connectors`.
+- Agentic design patterns beyond tool use and the Supervisor's
+  multi-agent routing: reflection (a drafted renewal notice with a
+  self-check), case-level evals and error analysis, read-only planning
+  for account risk questions -- planned as use cases UC1-UC6 in
+  `apm_connectors`' `docs/roadmap.md`, Phase 7.
 - Any specialized agent besides Order-Renewal (Churn Prevention,
   Customer Onboarding, ...) — add one the same way: a new
   `agents/<name>/` package with its own `policy.yaml` + `case_graph.py`
