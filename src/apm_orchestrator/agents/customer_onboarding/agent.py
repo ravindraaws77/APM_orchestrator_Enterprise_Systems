@@ -20,6 +20,7 @@ from claude_agent_sdk import (
 )
 
 from apm_orchestrator.agents.customer_onboarding.policy import CustomerOnboardingPolicy, load_policy
+from apm_orchestrator.agent_result import raise_if_stopped
 from apm_orchestrator.config import load_settings
 from apm_orchestrator.tools import apm_connectors_server
 
@@ -124,6 +125,7 @@ async def run_customer_onboarding(prompt: str, *, policy_path: str | None = None
             for block in message.content:
                 if isinstance(block, TextBlock):
                     final_text += block.text
-        elif isinstance(message, ResultMessage) and message.subtype == "success":
+        elif isinstance(message, ResultMessage):
+            raise_if_stopped("Customer-Onboarding agent", message)
             final_text = message.result or final_text
     return final_text
