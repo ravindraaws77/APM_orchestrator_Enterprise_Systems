@@ -22,6 +22,10 @@ postgres = ["langgraph>=0.2", "langgraph-checkpoint-postgres>=2.0", "psycopg[bin
 # Needs the postgres extra too (it reuses the Order-Renewal case graph's
 # account-matching helpers).
 strands = ["strands-agents[anthropic]>=1.64"]
+# Grounded RAG over Drive documents (src/apm_orchestrator/rag/): pypdf
+# for per-page PDF text, anthropic for the one structured-output answer
+# call. The rag core itself imports neither eagerly.
+rag = ["pypdf>=5.0", "anthropic>=0.80"]
 
 [project.scripts]
 apm-orchestrator = "apm_orchestrator.cli:main"
