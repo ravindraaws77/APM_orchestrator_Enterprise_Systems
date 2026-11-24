@@ -47,6 +47,9 @@ from langgraph.types import Command, interrupt
 from apm_orchestrator.agents.order_renewal.policy import load_policy
 from apm_orchestrator.connectors_client import ConnectorError
 from apm_orchestrator.db import CaseRegistry
+from apm_orchestrator.rag import runtime as rag_runtime
+from apm_orchestrator.rag.contract_terms import extract_contract_terms, format_terms_for_description
+from apm_orchestrator.rag.drive_qa import build_drive_corpus
 from apm_orchestrator.tools import get_client
 
 logger = logging.getLogger("apm_orchestrator.case_graph")
@@ -64,6 +67,11 @@ class CaseState(TypedDict, total=False):
     blocked: bool
     blocker_reason: str | None
     contract_doc: dict[str, Any] | None
+    # Cited terms from the contract (apm_orchestrator.rag), keyed by
+    # policy question key -> RagResult.to_dict(). Informational only:
+    # nothing in this graph branches on them.
+    contract_terms: dict[str, Any] | None
+    contract_terms_summary: str | None
     call_start: str | None
 
     awaiting_step: str | None  # "call" | "notice" | "record_update"
@@ -91,6 +99,8 @@ class CaseOutcome:
     step: str | None
     final_summary: str | None
     done: bool
+    # Grounded, cited contract terms for the human reviewer (or None).
+    contract_terms_summary: str | None = None
 
 
 def _config(case_id: str) -> dict[str, Any]:
@@ -316,6 +326,50 @@ async def pull_contract_node(state: CaseState) -> dict[str, Any]:
     return {"contract_doc": files[0], "steps_completed": steps + ["pull_contract"]}
 
 
+async def extract_contract_terms_node(state: CaseState) -> dict[str, Any]:
+    """Best-effort, like pull_contract: cited contract terms (notice
+    period, renewal term, auto-renew, uplift cap -- whatever policy's
+    contract_terms.questions lists) for the human reviewer. Never stops
+    the case and never changes its path: any failure -- connector,
+    parsing, model -- is logged and recorded as a step, and the case
+    continues to propose_call exactly as it would without this node.
+
+    Only terms whose citations verified are rendered into the summary
+    (see rag.contract_terms.format_terms_for_description); the rest are
+    shown as "not found" / "needs human review", never as values."""
+    steps = state.get("steps_completed", [])
+    cfg = load_policy().contract_terms
+    if not cfg.enabled or not cfg.questions:
+        return {"steps_completed": steps + ["extract_contract_terms:disabled"]}
+    if not state.get("contract_doc"):
+        return {"steps_completed": steps + ["extract_contract_terms:skipped_no_contract"]}
+
+    try:
+        corpus = await build_drive_corpus(
+            get_client(),
+            name_contains=state["account_name"],
+            max_files=cfg.max_files,
+            process_id=state.get("case_id"),
+            chunk_chars=cfg.chunk_chars,
+            overlap_chars=cfg.overlap_chars,
+        )
+        if corpus.index is None:
+            return {"steps_completed": steps + ["extract_contract_terms:no_readable_documents"]}
+        results = await extract_contract_terms(
+            corpus.index, rag_runtime.get_answer_model(), cfg.questions, top_k=cfg.top_k, min_score=cfg.min_score
+        )
+    except Exception as exc:  # noqa: BLE001 - best-effort by design; see docstring
+        logger.warning("case %s: extract_contract_terms failed: %s", state.get("case_id"), exc)
+        return {"steps_completed": steps + ["extract_contract_terms:error"]}
+
+    grounded = sum(1 for r in results.values() if r.status == "grounded")
+    return {
+        "contract_terms": {key: r.to_dict() for key, r in results.items()},
+        "contract_terms_summary": format_terms_for_description(results, cfg.questions) or None,
+        "steps_completed": steps + [f"extract_contract_terms:{grounded}/{len(results)}_grounded"],
+    }
+
+
 @_guarded("propose_call")
 async def propose_call_node(state: CaseState) -> dict[str, Any]:
     client = get_client()
@@ -402,6 +456,12 @@ def wait_for_approval_node(state: CaseState) -> dict[str, Any]:
             "step": state["awaiting_step"],
             "action_id": state["action_id"],
             "pending_action": state["pending_action"],
+            # None of this graph's proposals has an internal free-text
+            # field (calendar create-event takes no description; the
+            # notice email goes to the customer; the record update is
+            # Salesforce fields), so the cited terms travel with the
+            # approval wait instead, for whoever reviews it.
+            "contract_terms_summary": state.get("contract_terms_summary"),
         }
     )
     return {"last_action_result": decision, "pending_action": None}
@@ -414,6 +474,10 @@ def record_outcome_node(state: CaseState) -> dict[str, Any]:
         summary = f"Stopped: the {state.get('awaiting_step')} step was rejected."
     else:
         summary = f"Renewal workflow completed for {state['account_name']}."
+
+    terms = state.get("contract_terms_summary")
+    if terms:
+        summary += "\n" + terms
 
     stale = state.get("stale_opportunities")
     if stale:
@@ -450,6 +514,7 @@ def build_case_graph(checkpointer: Any):
     graph.add_node("verify_account", verify_account_node)
     graph.add_node("check_blockers", check_blockers_node)
     graph.add_node("pull_contract", pull_contract_node)
+    graph.add_node("extract_contract_terms", extract_contract_terms_node)
     graph.add_node("propose_call", propose_call_node)
     graph.add_node("wait_for_approval", wait_for_approval_node)
     graph.add_node("propose_notice", propose_notice_node)
@@ -470,7 +535,8 @@ def build_case_graph(checkpointer: Any):
         _route_after_check,
         {"_continue": "pull_contract", "record_outcome": "record_outcome"},
     )
-    graph.add_edge("pull_contract", "propose_call")
+    graph.add_edge("pull_contract", "extract_contract_terms")
+    graph.add_edge("extract_contract_terms", "propose_call")
     graph.add_conditional_edges(
         "propose_call",
         _route_after_check,
@@ -513,6 +579,7 @@ def _to_outcome(case_id: str, result: dict[str, Any]) -> CaseOutcome:
             step=payload["step"],
             final_summary=None,
             done=False,
+            contract_terms_summary=payload.get("contract_terms_summary"),
         )
     return CaseOutcome(
         case_id=case_id,
@@ -521,6 +588,7 @@ def _to_outcome(case_id: str, result: dict[str, Any]) -> CaseOutcome:
         step=None,
         final_summary=result.get("final_summary"),
         done=True,
+        contract_terms_summary=result.get("contract_terms_summary"),
     )
 
 

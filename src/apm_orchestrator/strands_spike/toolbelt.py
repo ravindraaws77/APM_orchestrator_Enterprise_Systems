@@ -33,6 +33,8 @@ from apm_orchestrator.agents.order_renewal.case_graph import (
 )
 from apm_orchestrator.agents.order_renewal.policy import OrderRenewalPolicy
 from apm_orchestrator.connectors_client import ConnectorError, ConnectorsClient
+from apm_orchestrator.rag.answer import AnswerModel
+from apm_orchestrator.rag.drive_qa import ask_drive
 from apm_orchestrator.tools import _disambiguate_pending_action
 
 READ_TOOLS = frozenset(
@@ -40,6 +42,8 @@ READ_TOOLS = frozenset(
 )
 PROPOSAL_TOOLS = frozenset({"propose_follow_up_ticket"})
 TOOLBELT = READ_TOOLS | PROPOSAL_TOOLS
+# Optional, read-only: only added when build_toolbelt gets an answer model.
+CONTRACT_QA_TOOLS = frozenset({"ask_contract"})
 
 
 def _escape_jql_string(value: str) -> str:
@@ -48,11 +52,15 @@ def _escape_jql_string(value: str) -> str:
 
 
 def build_toolbelt(
-    client: ConnectorsClient, policy: OrderRenewalPolicy, process_id: str | None = None
+    client: ConnectorsClient,
+    policy: OrderRenewalPolicy,
+    process_id: str | None = None,
+    answer_model: AnswerModel | None = None,
 ) -> list[Any]:
     """Returns the Strands tools for one triage run, bound to ``client``
     and ``policy``. ``process_id`` tags every connector call so the run
-    shows up as one process in apm_connectors' audit log."""
+    shows up as one process in apm_connectors' audit log. Passing an
+    ``answer_model`` adds the read-only ``ask_contract`` tool."""
 
     @tool
     async def lookup_renewal_opportunity(account_name: str) -> dict[str, Any]:
@@ -191,4 +199,37 @@ def build_toolbelt(
             return {"status": "error", "detail": str(exc)}
         return status if status is not None else {"status": "pending_human_decision"}
 
-    return [lookup_renewal_opportunity, find_blocking_tickets, propose_follow_up_ticket, check_action_status]
+    tools = [lookup_renewal_opportunity, find_blocking_tickets, propose_follow_up_ticket, check_action_status]
+    if answer_model is None:
+        return tools
+
+    terms_cfg = policy.contract_terms
+
+    @tool
+    async def ask_contract(account_name: str, question: str) -> dict[str, Any]:
+        """Answer one question about this account's contract documents in Drive, with verified citations. Read-only.
+
+        Only treat the answer as known when status is "grounded"; then cite
+        its document and page. "insufficient_evidence" means the documents
+        don't say; "needs_human_review" means an answer could not be
+        verified, so none is returned.
+
+        Args:
+            account_name: The customer account name (used to find its Drive files).
+            question: One specific question, e.g. "What notice period is required for non-renewal?"
+        """
+        try:
+            return await ask_drive(
+                client,
+                question=question,
+                model=answer_model,
+                name_contains=account_name,
+                max_files=terms_cfg.max_files,
+                top_k=terms_cfg.top_k,
+                min_score=terms_cfg.min_score,
+                process_id=process_id,
+            )
+        except ConnectorError as exc:
+            return {"status": "error", "detail": str(exc)}
+
+    return [*tools, ask_contract]

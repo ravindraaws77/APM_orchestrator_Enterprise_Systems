@@ -128,3 +128,46 @@ reporting:
 record_update:
   fields_template:
     StageName: "Closed Won"
+
+# Cited contract-term extraction after pull_contract (best-effort, never
+# stops a case): each question runs through apm_orchestrator.rag's full
+# pipeline -- retrieve -> abstain gate -> one RAG_MODEL call -> verify
+# gate -- and only terms whose quotes verify against the retrieved
+# contract text are shown to a human reviewer. One model call per
+# question that passes the abstain gate, so each question here is a
+# real per-case cost.
+contract_terms:
+  enabled: true
+  # Drive files whose name contains the account name, read via the
+  # connectors' read-only drive_list_files/drive_read_file.
+  max_files: 5
+  top_k: 5
+  # Abstain gate, on retrieval relevance in [0, 1] (the IDF-weighted
+  # share of the query's terms found in the best chunk -- see
+  # rag/index.py), not a raw BM25 score. Lenient on purpose: it only
+  # keeps a clearly off-topic question away from the model; the verify
+  # gate is what makes an answer trustworthy.
+  min_score: 0.2
+  chunk_chars: 800
+  overlap_chars: 150
+  # `question` is what the model answers; `query` is the retrieval
+  # wording -- write it in the vocabulary your contracts actually use
+  # (BM25 is lexical: "uplift cap" does not match "fees may increase by
+  # no more than").
+  questions:
+    - key: notice_period
+      label: Notice period
+      question: What notice period is required to terminate or not renew the agreement?
+      query: written notice of non-renewal termination days prior to end of term
+    - key: renewal_term
+      label: Renewal term
+      question: What is the renewal term length when the agreement renews?
+      query: renewal term renews successive months years
+    - key: auto_renew
+      label: Auto-renewal
+      question: Does the agreement renew automatically (auto-renewal / evergreen clause)?
+      query: renews automatically auto-renewal evergreen successive renewal term
+    - key: uplift_cap
+      label: Price uplift cap
+      question: What is the maximum price increase or uplift cap allowed at renewal?
+      query: fees increase uplift price cap percent renewal term no more than

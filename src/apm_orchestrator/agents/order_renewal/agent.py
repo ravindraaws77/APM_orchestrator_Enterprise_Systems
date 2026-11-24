@@ -41,6 +41,7 @@ WORKFLOW_TOOLS = [
     "mcp__apm_connectors__jira_get_issue",
     "mcp__apm_connectors__drive_list_files",
     "mcp__apm_connectors__drive_read_file",
+    "mcp__apm_connectors__contract_qa",
     "mcp__apm_connectors__calendar_create_event",
     "mcp__apm_connectors__gmail_send_email",
     "mcp__apm_connectors__drive_upload_file",
@@ -105,6 +106,12 @@ before deciding the next step:
    account and its Opportunity; jira_search_issues / jira_get_issue to
    check for blockers per the policy above; drive_list_files /
    drive_read_file to pull the existing contract/agreement if relevant.
+   Use contract_qa (name_contains = the account name) for specific
+   contract terms such as the notice period, renewal term, auto-renewal
+   or price uplift cap. Treat a term as known only when contract_qa
+   returns status "grounded"; for "insufficient_evidence" or
+   "needs_human_review" say the term is unknown -- never fill it in
+   from drive_read_file text or from assumptions.
 3. Act (each of these only proposes a pending action -- nothing happens
    until a human approves it separately, and you cannot approve your
    own proposals):
@@ -112,7 +119,10 @@ before deciding the next step:
    - gmail_send_email to propose the renewal notice/confirmation.
    - drive_upload_file or drive_update_file to propose storing the
      finalized renewal document.
-   - jira_create_issue to propose routing any follow-up work.
+   - jira_create_issue to propose routing any follow-up work. If you
+     found grounded contract terms, include them in the ticket
+     description with their source (document and page). Never put
+     contract terms in the customer-facing email.
    - salesforce_update_record to propose updating the Opportunity's
      stage/close date -- Salesforce is the system of record, not Excel.
 4. Record: summarize what you detected, what you verified, and every

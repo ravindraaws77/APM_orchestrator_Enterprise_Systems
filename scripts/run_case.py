@@ -61,6 +61,9 @@ async def main(agent: str, case_id: str, account_name: str) -> None:
     else:
         print(f"Case {case_id} is now awaiting approval on step {outcome.step!r} (action_id={outcome.action_id}):")
         print(json.dumps(outcome.pending_action, indent=2, default=str))
+        terms = getattr(outcome, "contract_terms_summary", None)
+        if terms:
+            print("\n" + terms)
         print("\nRun the poller (apm-orchestrator-poller) once that's decided.")
 
     await aclose_client()

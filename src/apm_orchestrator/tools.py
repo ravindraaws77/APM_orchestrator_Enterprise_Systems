@@ -32,6 +32,8 @@ from typing import Any
 from claude_agent_sdk import create_sdk_mcp_server, tool
 
 from apm_orchestrator.connectors_client import ConnectorError, ConnectorsClient
+from apm_orchestrator.rag import runtime as rag_runtime
+from apm_orchestrator.rag.drive_qa import DEFAULT_MAX_FILES, ask_drive
 
 _client: ConnectorsClient | None = None
 
@@ -523,6 +525,45 @@ async def jira_update_issue(args: dict[str, Any]) -> dict[str, Any]:
     return _ok(result)
 
 
+# -- Grounded document Q&A (read-only, not a single route) --------------
+
+
+@tool(
+    "contract_qa",
+    "Answer one question about the contract/agreement documents in the "
+    "configured Drive folder, with verified citations. Read-only: it only "
+    "lists and reads Drive files. Returns status 'grounded' (answer plus "
+    "citations, each with document and page), 'insufficient_evidence' "
+    "(the documents don't say -- do not guess) or 'needs_human_review' "
+    "(an answer could not be verified, so none is returned). Only state a "
+    "contract term to a human if the status is 'grounded', and cite its "
+    "source.",
+    {
+        "type": "object",
+        "properties": {
+            "question": _STR,
+            "name_contains": {
+                "type": "string",
+                "description": "Restrict to Drive files whose name contains this, e.g. the account name.",
+            },
+        },
+        "required": ["question"],
+    },
+)
+async def contract_qa(args: dict[str, Any]) -> dict[str, Any]:
+    try:
+        result = await ask_drive(
+            get_client(),
+            question=args["question"],
+            model=rag_runtime.get_answer_model(),
+            name_contains=args.get("name_contains"),
+            max_files=DEFAULT_MAX_FILES,
+        )
+    except ConnectorError as exc:
+        return _err(str(exc))
+    return _ok(result)
+
+
 ALL_TOOLS = [
     gmail_search_emails,
     gmail_read_message,
@@ -545,6 +586,7 @@ ALL_TOOLS = [
     jira_get_issue,
     jira_create_issue,
     jira_update_issue,
+    contract_qa,
 ]
 
 apm_connectors_server = create_sdk_mcp_server(

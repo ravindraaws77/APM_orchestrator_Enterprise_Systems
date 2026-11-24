@@ -33,7 +33,8 @@ from apm_orchestrator.agents.order_renewal.policy import OrderRenewalPolicy, loa
 from apm_orchestrator.config import Settings, load_settings
 from apm_orchestrator.connectors_client import ConnectorsClient
 from apm_orchestrator.strands_spike.guardrails import GuardrailLimits, ToolPolicyGuard
-from apm_orchestrator.strands_spike.toolbelt import PROPOSAL_TOOLS, TOOLBELT, build_toolbelt
+from apm_orchestrator.rag.answer import AnswerModel
+from apm_orchestrator.strands_spike.toolbelt import CONTRACT_QA_TOOLS, PROPOSAL_TOOLS, TOOLBELT, build_toolbelt
 
 MAX_TOKENS_PER_CALL = 4096
 
@@ -82,6 +83,16 @@ is "escalate" unless blockers make it "hold_for_blockers".
 """
 
 
+CONTRACT_QA_PROMPT = """
+Optional: ask_contract answers a question about the account's contract
+documents with verified citations. Use it at most a few times, only for
+terms that matter to the follow-up (notice period, renewal term,
+auto-renewal, uplift cap). Mention a term in the rationale or ticket
+description only if its status is "grounded", with its document and
+page; otherwise say it is unknown.
+"""
+
+
 @dataclass
 class TriageRun:
     report: RenewalTriageReport | None
@@ -121,14 +132,17 @@ def build_triage_agent(
     settings: Settings | None = None,
     limits: GuardrailLimits | None = None,
     process_id: str | None = None,
+    answer_model: AnswerModel | None = None,
 ) -> tuple[Agent, ToolPolicyGuard]:
     """Builds the agent and returns it with its guard (whose ``audit``
     holds the run's tool and model decisions). ``model`` is injectable
-    so tests can run the full Strands loop with a scripted fake model."""
+    so tests can run the full Strands loop with a scripted fake model.
+    ``answer_model`` (a ``rag.AnswerModel``) enables the optional
+    read-only ``ask_contract`` tool and allowlists it in the guard."""
     settings = settings or load_settings()
     policy = policy or load_policy(settings.order_renewal_policy_path)
     guard = ToolPolicyGuard(
-        toolbelt=TOOLBELT,
+        toolbelt=TOOLBELT | (CONTRACT_QA_TOOLS if answer_model else frozenset()),
         proposal_tools=PROPOSAL_TOOLS,
         limits=limits or guardrail_limits_from_env(),
         exempt_tools=frozenset({RenewalTriageReport.__name__}),
@@ -136,8 +150,8 @@ def build_triage_agent(
     agent = Agent(
         name="renewal_triage",
         model=model or build_model(settings),
-        tools=build_toolbelt(client, policy, process_id=process_id),
-        system_prompt=SYSTEM_PROMPT,
+        tools=build_toolbelt(client, policy, process_id=process_id, answer_model=answer_model),
+        system_prompt=SYSTEM_PROMPT + (CONTRACT_QA_PROMPT if answer_model else ""),
         hooks=[guard],
         callback_handler=None,
     )
@@ -153,12 +167,19 @@ async def run_triage(
     settings: Settings | None = None,
     limits: GuardrailLimits | None = None,
     process_id: str | None = None,
+    answer_model: AnswerModel | None = None,
 ) -> TriageRun:
     """Runs one triage and never raises for a guardrail stop: a run cut
     short by a limit comes back with ``report=None`` and the reason, so
     the caller can route it to a human."""
     agent, guard = build_triage_agent(
-        client, model=model, policy=policy, settings=settings, limits=limits, process_id=process_id
+        client,
+        model=model,
+        policy=policy,
+        settings=settings,
+        limits=limits,
+        process_id=process_id,
+        answer_model=answer_model,
     )
     prompt = f"Triage renewal readiness for account: {account_name}"
     try:

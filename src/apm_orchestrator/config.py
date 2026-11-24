@@ -16,6 +16,8 @@ _DEFAULT_SUPERVISOR_MODEL = "claude-sonnet-5"
 _DEFAULT_BUSINESS_AGENT_MODEL = "claude-sonnet-5"
 _DEFAULT_SUPERVISOR_MAX_BUDGET_USD = 0.50
 _DEFAULT_BUSINESS_AGENT_MAX_BUDGET_USD = 2.00
+_DEFAULT_RAG_MODEL = "claude-sonnet-5"
+_DEFAULT_RAG_MAX_TOKENS = 4096
 
 
 @dataclass(frozen=True)
@@ -29,6 +31,8 @@ class Settings:
     business_agent_model: str = _DEFAULT_BUSINESS_AGENT_MODEL
     supervisor_max_budget_usd: float = _DEFAULT_SUPERVISOR_MAX_BUDGET_USD
     business_agent_max_budget_usd: float = _DEFAULT_BUSINESS_AGENT_MAX_BUDGET_USD
+    rag_model: str = _DEFAULT_RAG_MODEL
+    rag_max_tokens: int = _DEFAULT_RAG_MAX_TOKENS
 
 
 def _float_env(name: str, default: float) -> float:
@@ -68,4 +72,12 @@ def load_settings() -> Settings:
         business_agent_max_budget_usd=_float_env(
             "BUSINESS_AGENT_MAX_BUDGET_USD", _DEFAULT_BUSINESS_AGENT_MAX_BUDGET_USD
         ),
+        # The one structured-output call per grounded question in
+        # apm_orchestrator.rag (contract terms, contract_qa, ask_docs).
+        # Pinned for the same reason as the two models above. Short
+        # extraction with verbatim quotes, so a per-call max_tokens cap is
+        # the cost backstop here (there is no max_budget_usd on a plain
+        # Messages API call).
+        rag_model=os.environ.get("RAG_MODEL", _DEFAULT_RAG_MODEL),
+        rag_max_tokens=int(os.environ.get("RAG_MAX_TOKENS") or _DEFAULT_RAG_MAX_TOKENS),
     )
