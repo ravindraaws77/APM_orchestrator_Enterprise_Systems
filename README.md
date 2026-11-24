@@ -169,15 +169,22 @@ several reads and up to a handful of proposals. Why they exist at all:
 `FAILURES_AND_LESSONS_LEARNED.md` section 10.2 (an account ran out of
 credits after one calibration batch).
 
-**Known gap: a call stopped by a limit isn't reported as stopped.** When
-a limit is hit, the run ends with a `ResultMessage` whose `subtype` is
-not `"success"`. `run_supervisor` and each `run_<agent>` only take
-`message.result` from a `"success"` result; on any other subtype they
-fall through and return whatever assistant text had streamed so far,
-with no signal to the caller that the run was cut short. (Some error
-results, such as an exhausted credit balance, are raised by the SDK as
-`ResultError` instead -- section 10.2.) The durable case graph is not
-affected: its nodes are fixed `apm_connectors` calls, not agent loops.
+**A call stopped by a limit raises `AgentRunStopped`.** When a limit is
+hit (or the run fails any other way), the run ends with a `ResultMessage`
+whose `subtype` isn't `"success"`, or whose `is_error` is true.
+`run_supervisor` and each `run_<agent>` check that message with
+`agent_result.raise_if_stopped` and raise `AgentRunStopped` (subtype,
+terminal reason, turns used, cost so far) instead of returning the text
+that had streamed before the stop. Recent SDK versions also raise
+`ResultError` once the CLI exits, but only after the stream ends, and
+this repo's `claude-agent-sdk>=0.1` floor doesn't guarantee it -- so the
+check lives here. When a business agent stops inside a Supervisor
+delegation, the delegate tool returns an MCP tool error telling the
+Supervisor to report an incomplete run, not a result. A routing decision
+is still written to `SupervisorRoutingLog` even if the Supervisor run
+then stops. Tested in `tests/test_agent_run_stopped.py`. The durable
+case graph is not affected: its nodes are fixed `apm_connectors` calls,
+not agent loops.
 
 ### Why the Claude Agent SDK *and* LangGraph (and where Strands would fit)
 
