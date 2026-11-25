@@ -155,6 +155,82 @@ Order-Renewal case (four as shipped). Re-run
 `python -m apm_orchestrator.evals.run_rag_eval` before changing
 `RAG_MODEL`.
 
+### Agent SDK concepts: custom tools, turns and budgets
+
+Three Claude Agent SDK terms that come up throughout this repo:
+
+- **Custom tool.** A tool written in this repo (every `@tool` in
+  `tools.py`, plus the `delegate_to_*` tools in `supervisor.py`), as
+  opposed to a *built-in* tool that ships with the SDK (`Read`, `Bash`,
+  `WebSearch`, ...). "Custom" does not mean generated at run time: each
+  tool's name, description and input schema are fixed in code and
+  registered on an in-process MCP server (`create_sdk_mcp_server`) before
+  any agent starts. The only run-time decision is the model's -- whether
+  to call a tool, when, and with what arguments. An agent can only call
+  tools named in its `allowed_tools` list (its toolbelt), by
+  fully-qualified name (`mcp__apm_connectors__gmail_search_emails`).
+- **Turn (`max_turns`).** An agent is a loop: the model responds
+  (possibly calling tools), reads the tool results, and responds again
+  until it answers. One round of that loop is a turn. `max_turns` stops
+  the loop after N turns even if the model hasn't finished -- a brake on
+  a model stuck retrying the same failing call.
+- **Budget (`max_budget_usd`).** The SDK tracks the running token cost
+  of the call and stops it once that cost passes this dollar ceiling.
+
+Current values:
+
+| Call site | `max_turns` | `max_budget_usd` |
+|---|---|---|
+| Supervisor (`supervisor.py`) | 5 (hardcoded) | `SUPERVISOR_MAX_BUDGET_USD`, default $0.50 |
+| Order-Renewal / Customer-Onboarding agents (`agents/*/agent.py`) | 25 (hardcoded) | `BUSINESS_AGENT_MAX_BUDGET_USD`, default $2.00 |
+
+Both limits are backstops against a runaway call, not tuned production
+numbers: the Supervisor routes once, while a business agent chains
+several reads and up to a handful of proposals. Why they exist at all:
+`FAILURES_AND_LESSONS_LEARNED.md` section 10.2 (an account ran out of
+credits after one calibration batch).
+
+**A call stopped by a limit raises `AgentRunStopped`.** When a limit is
+hit (or the run fails any other way), the run ends with a `ResultMessage`
+whose `subtype` isn't `"success"`, or whose `is_error` is true.
+`run_supervisor` and each `run_<agent>` check that message with
+`agent_result.raise_if_stopped` and raise `AgentRunStopped` (subtype,
+terminal reason, turns used, cost so far) instead of returning the text
+that had streamed before the stop. Recent SDK versions also raise
+`ResultError` once the CLI exits, but only after the stream ends, and
+this repo's `claude-agent-sdk>=0.1` floor doesn't guarantee it -- so the
+check lives here. When a business agent stops inside a Supervisor
+delegation, the delegate tool returns an MCP tool error telling the
+Supervisor to report an incomplete run, not a result. A routing decision
+is still written to `SupervisorRoutingLog` even if the Supervisor run
+then stops. Tested in `tests/test_agent_run_stopped.py`. The durable
+case graph is not affected: its nodes are fixed `apm_connectors` calls,
+not agent loops.
+
+### Why the Claude Agent SDK *and* LangGraph (and where Strands would fit)
+
+The two do different jobs and are not alternatives to each other:
+
+- **Agent SDK** (`supervisor.py`, `agents/*/agent.py`): the model decides
+  the next step. Used for judgment -- routing, and the agentic
+  tool-using path.
+- **LangGraph** (`agents/*/case_graph.py`, plus `poller.py`): the code
+  decides the next step. Used for the durable process skeleton --
+  Postgres checkpoints, the `wait_for_approval` interrupt, resuming a
+  case days later from another process.
+
+AWS's Strands Agents SDK sits in the same slot as the Claude Agent SDK
+(a model-driven tool loop; model-agnostic, Bedrock by default), not in
+LangGraph's. It is used only in the `strands_spike/` framework
+comparison (see [Strands Agents spike](#strands-agents-spike)), not as a
+registered agent. Its main draw for this project would be
+its built-in A2A server for the Phase 6 document-extraction agent. The
+spike already follows the same rules as the Agent SDK code, and anything
+adopted later must too: pin the model explicitly (Strands defaults to a
+Bedrock model when none is given), add a cost cap (Strands has no
+built-in `max_budget_usd`; the spike's `ToolPolicyGuard` hook totals
+token usage), and never expose `decide_action` as a tool.
+
 ### Running a durable case (Postgres required)
 
 ```bash

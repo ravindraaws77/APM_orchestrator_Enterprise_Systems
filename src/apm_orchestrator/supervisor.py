@@ -37,6 +37,7 @@ from claude_agent_sdk import (
 
 from apm_orchestrator.agents.customer_onboarding.agent import run_customer_onboarding
 from apm_orchestrator.agents.order_renewal.agent import run_order_renewal
+from apm_orchestrator.agent_result import AgentRunStopped, raise_if_stopped, stopped_tool_result
 from apm_orchestrator.config import load_settings
 from apm_orchestrator.db import SupervisorRoutingLog
 
@@ -84,7 +85,10 @@ _CONFIDENCE_PROPERTIES: dict[str, Any] = {
     },
 )
 async def delegate_to_order_renewal(args: dict[str, Any]) -> dict[str, Any]:
-    result_text = await run_order_renewal(args["renewal_context"], mode="workflow")
+    try:
+        result_text = await run_order_renewal(args["renewal_context"], mode="workflow")
+    except AgentRunStopped as exc:
+        return stopped_tool_result(exc)
     return {"content": [{"type": "text", "text": result_text}]}
 
 
@@ -112,7 +116,10 @@ async def delegate_to_order_renewal(args: dict[str, Any]) -> dict[str, Any]:
     },
 )
 async def delegate_to_customer_onboarding(args: dict[str, Any]) -> dict[str, Any]:
-    result_text = await run_customer_onboarding(args["onboarding_context"])
+    try:
+        result_text = await run_customer_onboarding(args["onboarding_context"])
+    except AgentRunStopped as exc:
+        return stopped_tool_result(exc)
     return {"content": [{"type": "text", "text": result_text}]}
 
 
@@ -197,24 +204,32 @@ async def run_supervisor(prompt: str, *, routing_log: SupervisorRoutingLog | Non
     delegate_called: str | None = None
     confidence: str | None = None
     rationale: str | None = None
-    async for message in query(prompt=prompt, options=options):
-        if isinstance(message, AssistantMessage):
-            for block in message.content:
-                if isinstance(block, TextBlock):
-                    final_text += block.text
-                elif isinstance(block, ToolUseBlock) and block.name.startswith(DELEGATE_PREFIX):
-                    delegate_called = block.name[len(DELEGATE_PREFIX) :]
-                    confidence = block.input.get("confidence")
-                    rationale = block.input.get("rationale")
-        elif isinstance(message, ResultMessage) and message.subtype == "success":
-            final_text = message.result or final_text
-
-    if routing_log is not None and delegate_called is not None:
-        await routing_log.record(
-            delegate=delegate_called,
-            confidence=confidence or "unknown",
-            rationale=rationale or "",
-            request_excerpt=prompt[:500],
-        )
+    try:
+        async for message in query(prompt=prompt, options=options):
+            if isinstance(message, AssistantMessage):
+                for block in message.content:
+                    if isinstance(block, TextBlock):
+                        final_text += block.text
+                    elif isinstance(block, ToolUseBlock) and block.name.startswith(DELEGATE_PREFIX):
+                        delegate_called = block.name[len(DELEGATE_PREFIX) :]
+                        confidence = block.input.get("confidence")
+                        rationale = block.input.get("rationale")
+            elif isinstance(message, ResultMessage):
+                # A turn/budget limit or any other non-success result is an
+                # AgentRunStopped, never partial text returned as an answer
+                # -- see agent_result.py.
+                raise_if_stopped("Supervisor", message)
+                final_text = message.result or final_text
+    finally:
+        # Logged even when the run stopped early: the routing decision was
+        # already made, and calibration ground truth can't be backfilled
+        # later (CLAUDE.md).
+        if routing_log is not None and delegate_called is not None:
+            await routing_log.record(
+                delegate=delegate_called,
+                confidence=confidence or "unknown",
+                rationale=rationale or "",
+                request_excerpt=prompt[:500],
+            )
 
     return final_text

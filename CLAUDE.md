@@ -211,6 +211,7 @@ human or written into a proposal comes from grounded results only
 ```
 src/apm_orchestrator/
   config.py           env/config loading
+  agent_result.py     AgentRunStopped: a limit-stopped agent run raises, never returns partial text
   connectors_client.py  the only HTTP boundary to apm_connectors
   db.py                 CaseRegistry (which case ids exist, for the poller)
                          + SupervisorRoutingLog (routing confidence, for review)
