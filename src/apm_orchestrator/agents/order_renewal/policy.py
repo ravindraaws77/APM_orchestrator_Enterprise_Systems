@@ -15,7 +15,54 @@ from typing import Any
 
 import yaml
 
+from apm_orchestrator.rag.answer import DEFAULT_MIN_SCORE, DEFAULT_TOP_K
+from apm_orchestrator.rag.chunking import DEFAULT_CHUNK_CHARS, DEFAULT_OVERLAP_CHARS
+from apm_orchestrator.rag.contract_terms import DEFAULT_TERM_QUESTIONS, TermQuestion
+from apm_orchestrator.rag.drive_qa import DEFAULT_MAX_FILES
+
 _DEFAULT_POLICY_PATH = Path(__file__).parent / "policy.yaml"
+
+
+@dataclass(frozen=True)
+class ContractTermsPolicy:
+    """The ``contract_terms`` section. Every field has a default, so a
+    policy file written before this section existed still loads (with
+    extraction on, using rag's default questions)."""
+
+    enabled: bool = True
+    max_files: int = DEFAULT_MAX_FILES
+    top_k: int = DEFAULT_TOP_K
+    min_score: float = DEFAULT_MIN_SCORE
+    chunk_chars: int = DEFAULT_CHUNK_CHARS
+    overlap_chars: int = DEFAULT_OVERLAP_CHARS
+    questions: tuple[TermQuestion, ...] = DEFAULT_TERM_QUESTIONS
+
+    @classmethod
+    def from_raw(cls, raw: dict[str, Any] | None) -> ContractTermsPolicy:
+        raw = raw or {}
+        questions = raw.get("questions")
+        parsed = (
+            tuple(
+                TermQuestion(key=q["key"], label=q.get("label", q["key"]), question=q["question"], query=q.get("query"))
+                for q in questions
+            )
+            if questions
+            else DEFAULT_TERM_QUESTIONS
+        )
+        if len({q.key for q in parsed}) != len(parsed):
+            raise ValueError("contract_terms.questions: duplicate key")
+        min_score = float(raw.get("min_score", DEFAULT_MIN_SCORE))
+        if not 0.0 <= min_score <= 1.0:
+            raise ValueError("contract_terms.min_score is a relevance in [0, 1], not a raw BM25 score")
+        return cls(
+            enabled=bool(raw.get("enabled", True)),
+            max_files=int(raw.get("max_files", DEFAULT_MAX_FILES)),
+            top_k=int(raw.get("top_k", DEFAULT_TOP_K)),
+            min_score=min_score,
+            chunk_chars=int(raw.get("chunk_chars", DEFAULT_CHUNK_CHARS)),
+            overlap_chars=int(raw.get("overlap_chars", DEFAULT_OVERLAP_CHARS)),
+            questions=parsed,
+        )
 
 
 @dataclass(frozen=True)
@@ -68,6 +115,11 @@ class OrderRenewalPolicy:
         return routing["default_project_key"]
 
     @property
+    def follow_up_issue_type(self) -> str:
+        """Jira work type used when proposing a follow-up ticket."""
+        return self.raw["follow_up_routing"]["issue_type"]
+
+    @property
     def reporting_sheet(self) -> str:
         return self.raw["reporting"]["workbook_sheet"]
 
@@ -78,6 +130,10 @@ class OrderRenewalPolicy:
     @property
     def record_update_fields(self) -> dict[str, Any]:
         return dict(self.raw["record_update"]["fields_template"])
+
+    @property
+    def contract_terms(self) -> ContractTermsPolicy:
+        return ContractTermsPolicy.from_raw(self.raw.get("contract_terms"))
 
 
 def load_policy(path: str | Path | None = None) -> OrderRenewalPolicy:

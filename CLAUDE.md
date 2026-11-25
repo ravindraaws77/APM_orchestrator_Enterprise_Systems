@@ -78,6 +78,22 @@ the same reason -- a recently-passed close date is still "in window,"
 not just an upcoming one. See
 `test_picks_opportunity_closest_to_today_not_the_ascending_first`.
 
+**Never return an answer whose citations failed verification.**
+`apm_orchestrator.rag` only populates `RagResult.answer` when status is
+`grounded`, i.e. every citation's quote was found (after normalisation)
+in a chunk actually retrieved for that question. One failed citation, or
+an answer with zero citations, is `needs_human_review` with
+`answer=None` -- never "here's the answer, but double-check it." Don't
+add a code path (a fallback, a "best guess" field, a summary that
+renders `needs_human_review` terms as values) that surfaces unverified
+model text as a contract term or document fact; anything shown to a
+human or written into a proposal comes from grounded results only
+(`format_terms_for_description` is the pattern). Guarded by
+`tests/test_rag.py`'s verify-gate tests. The verify gate proves a quote
+*exists*, not that it supports the answer -- that's what
+`evals/run_rag_eval.py`'s grader is for, so re-run it before changing
+`RAG_MODEL`, the prompt or the gates.
+
 ## Working conventions
 
 - **Agents are decomposed by business process, not by connector.** A
@@ -112,6 +128,15 @@ not just an upcoming one. See
   approval-gate graph.
 - Never commit secrets. `.env.example` documents required variables;
   real values go in a local, gitignored `.env`.
+- **`rag/` stays framework-free, and its abstain threshold is a
+  relevance, not a raw score.** No Claude Agent SDK / LangGraph /
+  Strands imports under `rag/` (the Anthropic SDK only lazily, in
+  `AnthropicAnswerModel`); callers wrap it, not the other way round.
+  `min_score` compares against `ScoredChunk.relevance` in [0, 1] --
+  raw BM25 scores collapse on the one- or two-document corpora a single
+  account has, so a raw-score threshold silently abstains on good
+  questions there. RAG steps in a case graph are best-effort: they
+  never set `stop_reason` and never change the case's path.
 - Adding a new `@tool` to `tools.py` is additive; changing an existing
   one's `input_schema` to match a breaking change in `apm_connectors`'
   own `/tools/*` contract needs both repos updated together.
@@ -198,8 +223,17 @@ src/apm_orchestrator/
   agents/
     order_renewal/      pilot agent: policy.yaml + policy.py + agent.py
                          (Claude Agent SDK) + case_graph.py (LangGraph)
+  rag/                  grounded RAG, framework-free: loaders, chunking,
+                         index (BM25 + pluggable dense), answer (abstain +
+                         verify gates), grounding, contract_terms,
+                         drive_qa (shared Drive entry point), runtime
+                         (pinned RAG_MODEL)
+  strands_spike/        framework spike: renewal triage on Strands Agents
+                         (toolbelt + guardrail hooks + typed report), not
+                         a registered agent -- see README.md
   evals/                golden-dataset evals against the real Claude API
-                         (routing_cases.py + run_supervisor_routing_eval.py) --
+                         (routing_cases.py + run_supervisor_routing_eval.py;
+                         rag_cases.py + run_rag_eval.py) --
                          distinct from tests/: judged by pass-rate over a
                          versioned dataset, not assert-equal-on-one-input
   cli.py               manual single-prompt smoke test (Supervisor)
@@ -211,11 +245,14 @@ scripts/
   review_routing_log.py    sample both confidence buckets, record a human's correct/incorrect verdict
   calibration_report.py    the actual calibration check: wrong-rate per confidence bucket, from reviewed rows
   test_supervisor_routing.py  thin CLI shim over evals/run_supervisor_routing_eval.py
+  run_strands_triage.py  run the Strands triage spike once, live
+  ask_docs.py           one grounded question over Drive or a local folder
   e2e_smoke.py          real-server smoke test, no mocks
 tests/                 unit tests (mocked client, no infra) plus
                         test_case_graph_mechanics.py (real Postgres +
                         real server, skipped unless configured) and
                         test_supervisor_routing_eval.py (real Claude API,
                         skipped unless ANTHROPIC_API_KEY is set -- see
-                        .github/workflows/eval.yml for the scheduled CI run)
+                        .github/workflows/eval.yml for the scheduled CI run);
+                        test_rag_eval.py runs the RAG eval's offline half
 ```

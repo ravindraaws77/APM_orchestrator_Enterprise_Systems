@@ -1,4 +1,4 @@
-name: Supervisor routing eval
+name: Live evals (Supervisor routing, grounded RAG)
 
 # Runs the live golden-dataset eval (src/apm_orchestrator/evals/) against
 # the real Claude API. Separate from ci.yml on purpose: this makes ~20
@@ -21,8 +21,8 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Install package + dev/postgres extras
-        run: pip install -e ".[dev,postgres]"
+      - name: Install package + dev/postgres/rag extras
+        run: pip install -e ".[dev,postgres,rag]"
 
       - name: Run Supervisor routing eval
         env:
@@ -40,5 +40,30 @@ jobs:
         with:
           name: supervisor-routing-eval-results
           path: eval-results.json
+          if-no-files-found: ignore
+          retention-days: 90
+
+      # Grounded RAG eval (src/apm_orchestrator/evals/rag_cases.py): ~16
+      # RAG_MODEL calls over a synthetic contract corpus. Runs even if the
+      # routing eval failed -- they test unrelated things. Fails only on a
+      # FAIL verdict (a wrong or hallucinated grounded answer); misses
+      # and safe outcomes are reported in the JSON, not gated on.
+      - name: Run grounded RAG eval
+        if: success() || failure()
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          if [ -z "$ANTHROPIC_API_KEY" ]; then
+            echo "::warning::ANTHROPIC_API_KEY secret not set -- skipping live RAG eval."
+            exit 0
+          fi
+          python -m apm_orchestrator.evals.run_rag_eval --output rag-eval-results.json
+
+      - name: Upload RAG eval results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rag-eval-results
+          path: rag-eval-results.json
           if-no-files-found: ignore
           retention-days: 90

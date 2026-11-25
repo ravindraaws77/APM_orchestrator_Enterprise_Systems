@@ -52,6 +52,12 @@ of.
   single write behind its own in-process approval `interrupt()` — see
   that module's docstring for how the two relate (they never share a
   checkpointer).
+- **Grounded RAG** (`src/apm_orchestrator/rag/`) — cited answers from
+  contract documents in Drive, behind two gates: weak retrieval never
+  reaches the model, and an answer whose citations don't verify is
+  never returned. Feeds cited contract terms into the Order-Renewal
+  case for its human reviewer, and a read-only `contract_qa` tool. See
+  [Grounded RAG over contract documents](#grounded-rag-over-contract-documents).
 - **Poller** (`poller.py`) — a standalone process that resumes an
   in-flight case once its `apm_connectors` pending action resolves.
   Decoupled from everything else on purpose: run it once (`--once`, for
@@ -85,6 +91,12 @@ See `apm_connectors/docs/security-guardrails.md`.
   *has* been run end to end against real Gmail/Salesforce/Jira -- see
   `CLAUDE.md`'s note on the exact-match SOQL bug that run surfaced and
   fixed in `verify_account_node`.
+- The grounded RAG layer (`rag/`, the case graph's
+  `extract_contract_terms` node, `contract_qa`) hasn't run against the
+  real Claude API or real Drive files yet -- only offline, with fake
+  models (`tests/test_rag*.py`). Its live eval
+  (`python -m apm_orchestrator.evals.run_rag_eval`) is the first thing
+  to run once `ANTHROPIC_API_KEY` is available.
 
 ## Running locally
 
@@ -133,6 +145,15 @@ Opus-tier capability. `pytest tests/test_supervisor_routing_eval.py`
 to `claude-haiku-4-5` for routing specifically before committing to it;
 don't change `SUPERVISOR_MODEL` in a shared config without re-running
 that eval first.
+
+Grounded RAG (`apm_orchestrator.rag`) makes plain Messages API calls,
+not Agent SDK runs, so its backstop is a per-call output cap instead of
+a dollar budget: `RAG_MODEL` (default `claude-sonnet-5`) and
+`RAG_MAX_TOKENS` (default 4096). It costs one call per question that
+passes the abstain gate -- up to one per `contract_terms` question per
+Order-Renewal case (four as shipped). Re-run
+`python -m apm_orchestrator.evals.run_rag_eval` before changing
+`RAG_MODEL`.
 
 ### Agent SDK concepts: custom tools, turns and budgets
 
@@ -200,12 +221,15 @@ The two do different jobs and are not alternatives to each other:
 
 AWS's Strands Agents SDK sits in the same slot as the Claude Agent SDK
 (a model-driven tool loop; model-agnostic, Bedrock by default), not in
-LangGraph's. It isn't used here. Its main draw for this project would be
-its built-in A2A server for the Phase 6 document-extraction agent. If it's
-ever adopted, the same rules apply: pin the model explicitly (Strands
-defaults to a Bedrock model when none is given), add a cost cap (Strands
-has no built-in `max_budget_usd`; it takes a hook that totals token
-usage), and never expose `decide_action` as a tool.
+LangGraph's. It is used only in the `strands_spike/` framework
+comparison (see [Strands Agents spike](#strands-agents-spike)), not as a
+registered agent. Its main draw for this project would be
+its built-in A2A server for the Phase 6 document-extraction agent. The
+spike already follows the same rules as the Agent SDK code, and anything
+adopted later must too: pin the model explicitly (Strands defaults to a
+Bedrock model when none is given), add a cost cap (Strands has no
+built-in `max_budget_usd`; the spike's `ToolPolicyGuard` hook totals
+token usage), and never expose `decide_action` as a tool.
 
 ### Running a durable case (Postgres required)
 
@@ -287,6 +311,111 @@ If the report comes back saying confidence isn't calibrated, that's a
 real finding, not a bug to hide — it means `SYSTEM_PROMPT`'s calibration
 guidance needs revisiting before the flagged-for-review queue can be
 trusted.
+
+## Strands Agents spike
+
+`src/apm_orchestrator/strands_spike/` runs one bounded job on AWS's open-source
+[Strands Agents](https://strandsagents.com) SDK instead of the Claude Agent SDK,
+so the two frameworks can be compared on the same connectors, policy and
+guardrails. It's a framework evaluation, not a registered business agent: the
+Supervisor does not delegate to it.
+
+**The job:** renewal-readiness triage for one account. The agent finds the
+Salesforce Opportunity relevant to a renewal, checks Jira for blocking tickets,
+proposes at most one follow-up ticket (a paused action a human must approve),
+and returns a typed `RenewalTriageReport` (pydantic) through Strands' structured
+output.
+
+```
+pip install -e ".[dev,postgres,strands]"
+pytest -q tests/test_strands_triage.py          # full Strands loop, scripted fake model, no network
+python scripts/run_strands_triage.py "Acme Corp"  # live: real Claude API + real apm_connectors server
+```
+
+How the repo's rules carry over:
+
+| Concern | Claude Agent SDK agents | Strands spike |
+|---|---|---|
+| Model | `ClaudeAgentOptions(model=...)` from `load_settings()` | `AnthropicModel(model_id=settings.business_agent_model, max_tokens=4096)` |
+| Toolbelt | `allowed_tools` over the shared MCP server | Four task-level `@tool`s (`toolbelt.py`), plus a hook that refuses any other tool name |
+| Budget | `max_budget_usd`, `max_turns` | Hook-enforced caps on model calls, tool calls, proposals and total tokens (`guardrails.py`, `STRANDS_MAX_*` env vars) |
+| Output | Free text | Typed `RenewalTriageReport` |
+| Approval | No tool wraps the decision route | Same, and the guard refuses `decide_action` by name (tested) |
+| Contract Q&A | `contract_qa` in the Order-Renewal toolbelt | Optional `ask_contract`, built and allowlisted only with `--contract-qa` |
+
+Design choice: the tools are task-level, not one per `/tools/*` route. The model
+never writes SOQL or JQL; the tools run the Order-Renewal `policy.yaml`
+templates and reuse the case graph's live-verified helpers (normalized
+account matching, closest-to-today Opportunity, symmetric renewal window). The
+model only decides what to call and how to summarise it.
+
+## Grounded RAG over contract documents
+
+`src/apm_orchestrator/rag/` answers questions from documents in the
+connectors' Drive folder with citations that are checked, not trusted.
+It has no agent-framework imports; the case graph, the SDK tools and the
+Strands spike all call into it.
+
+```
+Drive (drive_list_files / drive_read_file, read-only)
+  -> load      text / markdown as one page, PDF one page per page (pypdf)
+  -> chunk     ~800 chars, overlapping, never across pages, ids {doc}#p{page}c{n}
+  -> retrieve  BM25 top_k (Retriever protocol; DenseIndex + Embedder pluggable)
+  -> ABSTAIN GATE   best chunk's relevance < min_score -> insufficient_evidence, no model call
+  -> RAG_MODEL      one structured-output call: {answer_found, answer, citations[{chunk_id, quote}]}
+  -> VERIFY GATE    every quote must appear (normalised) in a chunk retrieved for this question
+  -> grounded | insufficient_evidence | needs_human_review
+```
+
+- **The answer is withheld unless every citation verifies.** One bad
+  citation, or an answer with none, is `needs_human_review` with
+  `answer=None` -- never an answer with a warning attached.
+- **`min_score` is a relevance in [0, 1], not a raw BM25 score.** Raw
+  BM25 scores depend on corpus size: on a single short contract every
+  term's IDF is tiny, so a raw threshold abstains on good questions in
+  exactly the small per-account corpora this runs on. Relevance is the
+  IDF-weighted share of the question's terms found in the best chunk.
+  The gate is deliberately lenient (0.2 as shipped): it only keeps
+  clearly off-topic questions from the model. Precision comes from the
+  model's own "not found" and the verify gate.
+- **The verify gate proves a quote exists, not that it supports the
+  answer.** A model can quote real text and still answer wrongly; that's
+  what the eval's grader catches (and `tests/test_rag_eval.py` proves it
+  does, with a deliberately wrong fake model).
+- **Documents are untrusted data.** Excerpts are wrapped and labelled as
+  data in the prompt, and wrapper tags inside them are neutralised; an
+  injected instruction that leads to a made-up answer fails
+  verification.
+
+Where it's used:
+
+| Use | Where | Behaviour |
+|---|---|---|
+| U1: cited contract terms | `extract_contract_terms` node in the Order-Renewal case graph, after `pull_contract` | Best-effort, never stops a case. The questions (notice period, renewal term, auto-renew, uplift cap) and limits live in `policy.yaml`'s `contract_terms`. Verified terms, with document and page, travel with the approval wait (`contract_terms_summary` in the interrupt payload, `CaseOutcome`, `run_case.py` output, final summary). Proposal payloads are unchanged: none of this graph's proposals has an internal text field (the calendar route takes no description, the notice email is customer-facing). |
+| U2: on-demand Q&A | `contract_qa` tool (`tools.py`, Order-Renewal `WORKFLOW_TOOLS`); `ask_contract` in the Strands spike | Read-only. The agent prompt treats a term as known only when `grounded`, cites it in Jira descriptions, and never puts it in customer email. |
+| U3: ad-hoc | `scripts/ask_docs.py` | One question over Drive (`--name-contains`) or a local folder (`--dir`); `--retrieve-only` checks retrieval and the gate with no model call. |
+
+```
+pip install -e ".[dev,postgres,rag]"
+pytest -q tests/test_rag.py tests/test_rag_wiring.py tests/test_rag_eval.py   # offline, fake models
+python scripts/ask_docs.py "What notice period is required for non-renewal?" --name-contains "Acme"
+python -m apm_orchestrator.evals.run_rag_eval --retrieval-only   # deterministic half, no API calls
+python -m apm_orchestrator.evals.run_rag_eval --output rag-eval.json   # live, ~16 RAG_MODEL calls
+```
+
+**Eval** (`evals/rag_cases.py`): a synthetic contract corpus and cases
+labelled answerable, paraphrased, negative, cross_document,
+unanswerable, off_topic and injection. Each case grades PASS, MISS
+(answerable but not grounded: lost recall, still safe), SAFE (a
+non-ideal safe outcome) or FAIL (a wrong, hallucinated or injected value
+shown as grounded). Only FAIL fails the run; recall, gate leaks and
+verify-gate rejections are reported. The retrieval half runs offline on
+every push; the live half runs nightly in `.github/workflows/eval.yml`.
+Known gaps the dataset records rather than hides: paraphrased questions
+in vocabulary the contract doesn't use (BM25 misses them -- the case for
+plugging in `DenseIndex`), and an off-topic question that names a party
+to the contract passing the lenient gate (the model must then say "not
+found").
 
 ## Tests
 
