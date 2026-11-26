@@ -68,7 +68,9 @@ _CONFIDENCE_PROPERTIES: dict[str, Any] = {
     "when the request's business intent is renewing, extending, or "
     "re-upping an existing customer contract, license, or subscription "
     "-- a business-intent match, never a match on some tool the request "
-    "happens to mention (Gmail, Salesforce, ...).",
+    "happens to mention (Gmail, Salesforce, ...). Never use this for a "
+    "free trial, pilot or proof-of-concept 'renewal' by a prospect with "
+    "no paid contract yet: there is no contract to renew.",
     {
         "type": "object",
         "properties": {
@@ -99,7 +101,10 @@ async def delegate_to_order_renewal(args: dict[str, Any]) -> dict[str, Any]:
     "newly closed-won new-business customer -- a business-intent match, "
     "never a match on some tool the request happens to mention "
     "(Salesforce, Calendar, ...). Never use this for a renewal, even one "
-    "that also involves scheduling a call or sending an email.",
+    "that also involves scheduling a call or sending an email. Also "
+    "use this for a prospect converting from (or extending) a free "
+    "trial, pilot or proof-of-concept into their first paid contract, "
+    "even if the request calls it a 'renewal'.",
     {
         "type": "object",
         "properties": {
@@ -146,6 +151,16 @@ These two never overlap: a request about an *existing* customer's
 contract is always Order-Renewal, a request about a *brand-new*
 customer's kickoff is always Customer-Onboarding. Pass along the
 original request and any useful context to whichever you choose.
+
+Decide by the account's contract status, never by the word "renewal"
+(or "new") alone. A free trial, pilot or proof-of-concept is not a
+contract: a prospect whose trial is expiring or being extended, and who
+has never had a paid contract ("not a paying customer yet", "their
+first real contract"), is Customer-Onboarding even if the request asks
+for a "renewal of the trial". That case is clear-cut once you check
+contract status, so it is "high" confidence, not "low". Conversely, an
+existing paying customer adding something new at renewal time is still
+Order-Renewal.
 
 Every delegation call requires `confidence` ("high" or "low") and a
 one-sentence `rationale`. Set `confidence` to "low" whenever the request
