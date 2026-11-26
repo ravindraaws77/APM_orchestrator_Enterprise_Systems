@@ -467,11 +467,36 @@ using that exact function against a real `AsyncPostgresSaver` and a real
 `apm_connectors` server (Excel again, as the one credential-free write --
 see the file's docstring for why it doesn't drive the full Order-Renewal
 graph). Skipped unless both `APM_TEST_DATABASE_URL` and a reachable
-`APM_CONNECTORS_BASE_URL` are set:
+`APM_CONNECTORS_BASE_URL` are set. `tests/test_routing_log_mechanics.py`
+needs the same test database (not the server).
+
+The simplest way to run both is with test configuration only:
 
 ```bash
 pip install -e ".[dev,postgres]"
 createdb apm_orchestrator_test   # or point at any disposable Postgres
+# put APM_TEST_DATABASE_URL=postgresql://localhost/apm_orchestrator_test in .env
+
+# In apm_connectors (leave it running):
+python scripts/start_test_server.py
+
+# In this repo:
+python scripts/run_live_tests.py
+```
+
+`start_test_server.py` always uses a local test workbook, turns off
+every other live connector and uses two test API keys, whatever that
+repo's `.env` says (see its `docs/running-locally.md`).
+`run_live_tests.py` always points the tests at that server
+(`127.0.0.1:8123`) with the matching keys, overriding any normal
+`APM_CONNECTORS_*` values in this repo's `.env`, and refuses to run if
+`APM_TEST_DATABASE_URL` is the same as `DATABASE_URL`. Extra arguments
+pass through to pytest. The optional `APM_TEST_*` entries in
+`.env.example` change the server URL or keys.
+
+Without the scripts, set the variables yourself:
+
+```bash
 APM_TEST_DATABASE_URL=postgresql://localhost/apm_orchestrator_test \
 APM_CONNECTORS_BASE_URL=http://127.0.0.1:8123 \
 APM_CONNECTORS_API_KEY=orch-key \

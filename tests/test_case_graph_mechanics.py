@@ -22,7 +22,9 @@ convention apm_connectors' own test_postgres_state_store.py uses.
 
 from __future__ import annotations
 
+import asyncio
 import os
+import sys
 import uuid
 
 from typing import Any, TypedDict
@@ -38,8 +40,8 @@ from apm_orchestrator.connectors_client import ConnectorsClient
 
 TEST_DATABASE_URL = os.environ.get("APM_TEST_DATABASE_URL")
 BASE_URL = os.environ.get("APM_CONNECTORS_BASE_URL", "http://127.0.0.1:8123")
-ORCH_KEY = os.environ.get("APM_CONNECTORS_API_KEY", "orch-key-123")
-APPROVER_KEY = os.environ.get("APM_APPROVER_API_KEY", "approver-key-456")
+ORCH_KEY = os.environ.get("APM_CONNECTORS_API_KEY", "orch-key")
+APPROVER_KEY = os.environ.get("APM_APPROVER_API_KEY", "approver-key")
 
 pytestmark = pytest.mark.skipif(
     not TEST_DATABASE_URL, reason="APM_TEST_DATABASE_URL not set -- skipping real-Postgres graph tests"
@@ -105,11 +107,32 @@ def _build_test_graph(checkpointer):
     return graph.compile(checkpointer=checkpointer)
 
 
+def _run_on_selector_loop(coro):
+    """Run `coro` on a selector-based event loop, on every platform.
+
+    psycopg's async mode (AsyncPostgresSaver) can't run on Windows'
+    default ProactorEventLoop -- live-verified: this test failed there
+    with "Psycopg cannot use the 'ProactorEventLoop' to run in async
+    mode" until it ran its own loop. A plain SelectorEventLoop is fine
+    here because nothing in this test spawns a subprocess (see CLAUDE.md
+    on why that matters), and an explicit loop avoids depending on
+    pytest-asyncio's loop-policy hooks.
+    """
+    loop = asyncio.SelectorEventLoop() if sys.platform == "win32" else asyncio.new_event_loop()
+    try:
+        return loop.run_until_complete(coro)
+    finally:
+        loop.close()
+
+
 @pytest.mark.skipif(
     not _reachable(BASE_URL), reason=f"no apm_connectors server reachable at {BASE_URL}"
 )
-@pytest.mark.asyncio
-async def test_interrupt_survives_real_postgres_and_resumes_on_real_approval():
+def test_interrupt_survives_real_postgres_and_resumes_on_real_approval():
+    _run_on_selector_loop(_interrupt_resume_scenario())
+
+
+async def _interrupt_resume_scenario():
     from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 
     thread_id = f"mechanics-test-{uuid.uuid4()}"
