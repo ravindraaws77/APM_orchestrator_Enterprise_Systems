@@ -248,6 +248,8 @@ scripts/
   run_strands_triage.py  run the Strands triage spike once, live
   ask_docs.py           one grounded question over Drive or a local folder
   e2e_smoke.py          real-server smoke test, no mocks
+  run_live_tests.py     run the real-Postgres + real-server mechanics tests,
+                        always against apm_connectors' test server
 tests/                 unit tests (mocked client, no infra) plus
                         test_case_graph_mechanics.py (real Postgres +
                         real server, skipped unless configured) and
