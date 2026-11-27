@@ -60,6 +60,13 @@ class CaseState(TypedDict, total=False):
     account_name: str
     raw_request: str
 
+    # The policy.yaml content hash in effect for this case (set once, by
+    # detect_node) -- checkpointed like action_id, not just logged: unlike
+    # sdk_metrics.log_result's SDK loops (no case_id of their own), this
+    # graph's nodes always have one to attach it to. See the observability
+    # doc's "Item 8: Agent & policy drift", stage 2.
+    policy_version: str | None
+
     signal_message: dict[str, Any] | None
     opportunity: dict[str, Any] | None
     stale_opportunities: list[str]  # past-due, still-open -- a data-hygiene
@@ -186,7 +193,13 @@ def _guarded(step_name: str):
             except ConnectorError as exc:
                 steps = state.get("steps_completed", [])
                 logger.error(
-                    "case %s: %s failed: %s", state.get("case_id"), step_name, exc
+                    "case_graph step failed",
+                    extra={
+                        "case_id": state.get("case_id"),
+                        "step": step_name,
+                        "error": str(exc),
+                        "policy_version": state.get("policy_version"),
+                    },
                 )
                 return {
                     "stop_reason": f"{step_name} failed: {exc}",
@@ -212,10 +225,15 @@ async def detect_node(state: CaseState) -> dict[str, Any]:
         return {
             "stop_reason": f"No renewal signal found in Gmail for {state['account_name']!r}.",
             "steps_completed": steps + ["detect:no_signal"],
+            "policy_version": policy.policy_version,
         }
 
     message = await client.gmail_read_message(message_id=matches[0]["message_id"], process_id=state.get("case_id"))
-    return {"signal_message": message, "steps_completed": steps + ["detect"]}
+    return {
+        "signal_message": message,
+        "steps_completed": steps + ["detect"],
+        "policy_version": policy.policy_version,
+    }
 
 
 @_guarded("verify_account")

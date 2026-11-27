@@ -16,6 +16,7 @@ from langgraph.types import Command
 
 import apm_orchestrator.tools as tools_module
 from apm_orchestrator.agents.order_renewal.case_graph import build_case_graph
+from apm_orchestrator.agents.order_renewal.policy import load_policy
 from apm_orchestrator.config import Settings
 from apm_orchestrator.connectors_client import ConnectorsClient
 
@@ -52,6 +53,10 @@ async def test_detect_stops_when_no_gmail_signal(monkeypatch):
     )
 
     assert result["done"] is True
+    # detect_node records policy_version even when it stops immediately --
+    # the policy still governed the (non-)decision. See "Item 8: Agent &
+    # policy drift", stage 2.
+    assert result["policy_version"] == load_policy().policy_version
     assert "No renewal signal found" in result["final_summary"]
 
 
@@ -215,4 +220,7 @@ async def test_connector_failure_is_logged_and_still_sets_stop_reason(monkeypatc
 
     assert result["done"] is True
     assert "detect failed" in result["final_summary"]
-    assert any("c-fail" in r.message and "detect" in r.message for r in caplog.records)
+    assert any(
+        getattr(r, "case_id", None) == "c-fail" and getattr(r, "step", None) == "detect"
+        for r in caplog.records
+    )

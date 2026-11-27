@@ -39,6 +39,7 @@ from apm_orchestrator.agents.customer_onboarding.agent import run_customer_onboa
 from apm_orchestrator.agents.order_renewal.agent import run_order_renewal
 from apm_orchestrator.agent_result import AgentRunStopped, raise_if_stopped, stopped_tool_result
 from apm_orchestrator.config import load_settings
+from apm_orchestrator.sdk_metrics import log_result
 from apm_orchestrator.db import SupervisorRoutingLog
 
 DELEGATE_PREFIX = "mcp__supervisor_delegates__delegate_to_"
@@ -233,6 +234,7 @@ async def run_supervisor(prompt: str, *, routing_log: SupervisorRoutingLog | Non
                 # A turn/budget limit or any other non-success result is an
                 # AgentRunStopped, never partial text returned as an answer
                 # -- see agent_result.py.
+                log_result("supervisor", message)
                 raise_if_stopped("Supervisor", message)
                 final_text = message.result or final_text
     finally:
