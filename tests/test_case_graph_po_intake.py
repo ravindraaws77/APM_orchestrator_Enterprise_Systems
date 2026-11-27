@@ -301,3 +301,19 @@ async def test_poller_leaves_po_review_interrupts_alone(monkeypatch, connectors,
 
     resumed = await _sweep_agent("order_renewal", case_graph, _Registry(["po-poll"]), checkpointer, _NoStatusClient())
     assert resumed == 0
+
+
+@pytest.mark.asyncio
+async def test_contract_terms_run_before_po_intake_on_a_po_case(monkeypatch, connectors, configured_policy):
+    # Both branches hang off pull_contract: contract-term extraction runs for
+    # every case, and only then does a case with a po_file_id fork into PO
+    # intake -- a PO case must not skip its cited contract terms.
+    _install_extraction_agent(monkeypatch, FakeExtractor(_payload()))
+    graph = case_graph.build_case_graph(MemorySaver())
+
+    await _start(graph, "po-order")
+    steps = (await graph.aget_state(_config("po-order"))).values["steps_completed"]
+    def first(prefix: str) -> int:
+        return next(i for i, s in enumerate(steps) if s.startswith(prefix))
+
+    assert first("pull_contract") < first("extract_contract_terms") < first("extract_po")
