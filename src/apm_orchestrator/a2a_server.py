@@ -51,6 +51,8 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
+from apm_orchestrator.agent_result import AgentRunStopped
+
 RPC_PATH = "/a2a"
 
 SupervisorFn = Callable[[str], Awaitable[str]]
@@ -146,7 +148,14 @@ class SupervisorAgentExecutor(AgentExecutor):
             return
 
         await updater.start_work()
-        result = await self._run(prompt)
+        try:
+            result = await self._run(prompt)
+        except AgentRunStopped as exc:
+            # A turn/budget limit or API error: a failed task with the
+            # reason, never partial text returned as a finished answer
+            # (agent_result.py).
+            await updater.failed(new_text_message(str(exc), context_id=context_id, task_id=task_id))
+            return
         await updater.add_artifact([new_text_part(result, media_type="text/plain")], name="supervisor_result")
         await updater.complete()
 

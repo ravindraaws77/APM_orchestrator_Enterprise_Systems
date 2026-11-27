@@ -96,3 +96,33 @@ def test_a2a_layer_never_exposes_the_approval_decision():
     source = inspect.getsource(mod)
     assert "decide_action(" not in source
     assert "/decision" not in source
+
+
+def test_supervisor_stopped_early_is_a_failed_task_never_a_completed_one():
+    # run_supervisor raises AgentRunStopped on a turn/budget limit or an API
+    # error (agent_result.py). Over A2A that must be a FAILED task with the
+    # reason, never an escaped exception or a "completed" task.
+    from claude_agent_sdk import ResultMessage
+
+    from apm_orchestrator.agent_result import AgentRunStopped
+
+    async def stopping_supervisor(prompt: str) -> str:
+        raise AgentRunStopped(
+            "Supervisor",
+            ResultMessage(
+                subtype="error_max_budget_usd",
+                duration_ms=1,
+                duration_api_ms=1,
+                is_error=True,
+                num_turns=3,
+                session_id="s1",
+                total_cost_usd=0.5,
+            ),
+        )
+
+    client = TestClient(build_app(base_url="https://apm.example", supervisor=stopping_supervisor))
+    res = client.post(RPC_PATH, json=_send("Acme wants to renew their licence"), headers=V1)
+    task = res.json()["result"]["task"]
+    assert task["status"]["state"] == "TASK_STATE_FAILED"
+    assert "stopped early" in task["status"]["message"]["parts"][0]["text"]
+    assert not task.get("artifacts")
