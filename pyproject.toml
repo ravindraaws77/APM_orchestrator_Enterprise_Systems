@@ -26,10 +26,15 @@ strands = ["strands-agents[anthropic]>=1.64"]
 # for per-page PDF text, anthropic for the one structured-output answer
 # call. The rag core itself imports neither eagerly.
 rag = ["pypdf>=5.0", "anthropic>=0.80"]
+# Exposes the Supervisor to other agents over the A2A (Agent2Agent)
+# protocol -- see src/apm_orchestrator/a2a_server.py. Optional, like
+# `postgres`: nothing else in the package imports it.
+a2a = ["a2a-sdk[http-server]>=1.2,<2", "uvicorn>=0.29"]
 
 [project.scripts]
 apm-orchestrator = "apm_orchestrator.cli:main"
 apm-orchestrator-poller = "apm_orchestrator.poller:main"
+apm-orchestrator-a2a = "apm_orchestrator.a2a_server:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
